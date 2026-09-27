@@ -114,29 +114,51 @@ async function getActiveRoomsSummary() {
     });
   }
 
-  // 2. Merge with Firestore rooms
+  // 2. Merge with Firestore rooms across both collections (jinrou_rooms and rooms)
   if (firestoreDb) {
-    try {
-      const snap = await getDocs(collection(firestoreDb, 'jinrou_rooms'));
-      snap.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data && data.code && data.status !== 'finished') {
-          const count = data.players ? Object.keys(data.players).length : (data.members ? data.members.length : 0);
-          if (!roomsMap.has(data.code) || roomsMap.get(data.code).playerCount < count) {
-            roomsMap.set(data.code, {
-              code: data.code,
-              hostNickname: data.hostNickname || 'ホスト',
+    const targetCollections = ['jinrou_rooms', 'rooms'];
+    for (const col of targetCollections) {
+      try {
+        const snap = await getDocs(collection(firestoreDb, col));
+        snap.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (!data) return;
+          const code = String(data.code ?? data.roomCode ?? data.id ?? docSnap.id).replace(/^[#＃\s]/g, '').trim();
+          if (!code) return;
+
+          const rawStatus = (data.status || 'waiting').toString().toLowerCase();
+          if (rawStatus === 'finished' || rawStatus === 'ended' || rawStatus === 'closed') return;
+
+          let count = 1;
+          if (data.players && typeof data.players === 'object') {
+            count = Array.isArray(data.players) ? data.players.length : Object.keys(data.players).length;
+          } else if (Array.isArray(data.members)) {
+            count = data.members.length;
+          } else if (typeof data.playerCount === 'number') {
+            count = data.playerCount;
+          }
+
+          const hostNickname = data.hostNickname || data.hostName || data.host || data.owner || data.creator || 'ホスト';
+          const maxPlayers = Number(data.maxPlayers || data.max || data.capacity) || 5;
+          const roleMode = (data.roleMode || 'normal') === 'original' ? 'original' : 'normal';
+          const discussionTime = Number(data.discussionTime || data.time || data.discussion) || 60;
+          const status = (rawStatus === 'in_game' || rawStatus === 'playing') ? 'in_game' : 'waiting';
+
+          if (!roomsMap.has(code) || roomsMap.get(code).playerCount < count) {
+            roomsMap.set(code, {
+              code,
+              hostNickname,
               playerCount: count,
-              maxPlayers: data.maxPlayers || 5,
-              roleMode: data.roleMode || 'normal',
-              discussionTime: data.discussionTime || 60,
-              status: data.status || 'waiting'
+              maxPlayers,
+              roleMode,
+              discussionTime,
+              status
             });
           }
-        }
-      });
-    } catch (err) {
-      console.warn('[Server Firestore Active Rooms]', err.message);
+        });
+      } catch (err) {
+        console.warn(`[Server Firestore Active Rooms ${col}]`, err.message);
+      }
     }
   }
 
@@ -339,32 +361,59 @@ app.post('/api/jinrou/rooms', (req, res) => {
 });
 
 async function ensureRoomInMemory(code, roomData = null) {
-  let room = rooms.get(code);
+  const cleanCode = (code || '').toString().replace(/^[#＃\s]/g, '').trim();
+  let room = rooms.get(cleanCode);
   if (room) return room;
 
   let data = roomData;
 
-  // If not provided in payload, check Firestore!
+  // If not provided in payload, check Firestore across both collections!
   if (!data && firestoreDb) {
-    try {
-      const snap = await getDoc(doc(firestoreDb, 'jinrou_rooms', code));
-      if (snap && snap.exists()) {
-        data = snap.data();
+    const targetCollections = ['jinrou_rooms', 'rooms'];
+    for (const col of targetCollections) {
+      try {
+        const snap = await getDoc(doc(firestoreDb, col, cleanCode));
+        if (snap && snap.exists()) {
+          data = snap.data();
+          break;
+        }
+      } catch (e) {
+        console.warn(`[Server Firestore check ${col}/${cleanCode}]`, e.message);
       }
-    } catch (e) {
-      console.warn('[Server Firestore check room error]', e.message);
+    }
+
+    if (!data) {
+      for (const col of targetCollections) {
+        try {
+          const snap = await getDocs(collection(firestoreDb, col));
+          for (const d of snap.docs) {
+            const docData = d.data();
+            const docCode = String(docData.code ?? docData.roomCode ?? docData.id ?? d.id).replace(/^[#＃\s]/g, '').trim();
+            if (docCode === cleanCode || d.id === cleanCode || d.id === `#${cleanCode}`) {
+              data = docData;
+              break;
+            }
+          }
+          if (data) break;
+        } catch (e) {}
+      }
     }
   }
 
   if (data) {
+    const hostNickname = data.hostNickname || data.hostName || data.host || data.owner || data.creator || 'ホスト';
+    const hostId = data.hostId || data.ownerId || ('host_' + cleanCode);
+    const rawStatus = (data.status || 'waiting').toString().toLowerCase();
+    const status = (rawStatus === 'in_game' || rawStatus === 'playing') ? 'in_game' : (rawStatus === 'finished' ? 'finished' : 'waiting');
+
     room = {
-      code,
-      hostId: data.hostId || 'host',
-      hostNickname: data.hostNickname || 'ホスト',
-      status: data.status || 'waiting',
-      maxPlayers: Number(data.maxPlayers) || 5,
-      discussionTime: Number(data.discussionTime) || 60,
-      roleMode: data.roleMode || 'normal',
+      code: cleanCode,
+      hostId,
+      hostNickname,
+      status,
+      maxPlayers: Number(data.maxPlayers || data.max || data.capacity) || 5,
+      discussionTime: Number(data.discussionTime || data.time || data.discussion) || 60,
+      roleMode: (data.roleMode || 'normal') === 'original' ? 'original' : 'normal',
       rolesConfig: data.rolesConfig || {},
       rolesList: data.rolesList || [],
       players: new Map(),
@@ -374,21 +423,54 @@ async function ensureRoomInMemory(code, roomData = null) {
       game: null,
       timerInterval: null
     };
-    if (data.players) {
-      for (const [pId, pInfo] of Object.entries(data.players)) {
-        room.players.set(pId, {
-          id: pId,
-          nickname: pInfo.nickname || 'プレイヤー',
-          isHost: !!pInfo.isHost || (room.hostId === pId),
-          isAlive: pInfo.isAlive !== false,
-          isVcOn: pInfo.isVcOn !== false,
-          isMuted: !!pInfo.isMuted,
-          isSpeaking: false,
-          joinedAt: pInfo.joinedAt || Date.now()
+
+    if (data.players && typeof data.players === 'object') {
+      if (Array.isArray(data.players)) {
+        data.players.forEach((p, idx) => {
+          const pId = (p && p.id) ? String(p.id) : `p_${idx}`;
+          room.players.set(pId, {
+            id: pId,
+            nickname: (typeof p === 'object' && p) ? (p.nickname || p.name || `プレイヤー${idx + 1}`) : String(p),
+            isHost: (typeof p === 'object' && p) ? (p.isHost ?? (idx === 0)) : (idx === 0),
+            isAlive: (typeof p === 'object' && p) ? (p.isAlive !== false) : true,
+            isVcOn: (typeof p === 'object' && p) ? (p.isVcOn !== false) : true,
+            isMuted: false,
+            isSpeaking: false,
+            joinedAt: (typeof p === 'object' && p && p.joinedAt) || Date.now()
+          });
         });
+      } else {
+        for (const [pId, pInfo] of Object.entries(data.players)) {
+          if (pInfo && typeof pInfo === 'object') {
+            room.players.set(pId, {
+              id: pId,
+              nickname: pInfo.nickname || pInfo.name || 'プレイヤー',
+              isHost: !!pInfo.isHost || (hostId === pId),
+              isAlive: pInfo.isAlive !== false,
+              isVcOn: pInfo.isVcOn !== false,
+              isMuted: !!pInfo.isMuted,
+              isSpeaking: false,
+              joinedAt: pInfo.joinedAt || Date.now()
+            });
+          }
+        }
       }
     }
-    rooms.set(code, room);
+
+    if (room.players.size === 0) {
+      room.players.set(hostId, {
+        id: hostId,
+        nickname: hostNickname,
+        isHost: true,
+        isAlive: true,
+        isVcOn: true,
+        isMuted: false,
+        isSpeaking: false,
+        joinedAt: Date.now()
+      });
+    }
+
+    rooms.set(cleanCode, room);
     return room;
   }
   return null;
@@ -579,9 +661,9 @@ wss.on('connection', (ws) => {
           break;
         }
 
-        // --- Real-Time Join Request & Host Approval Flow ---
+        // --- Real-Time Join Room Flow (Direct, instant entry without host approval needed) ---
         case 'REQUEST_JOIN_ROOM': {
-          const code = (payload.roomCode || payload.code || '').toString().replace(/^[#＃]/, '').trim();
+          const code = (payload.roomCode || payload.code || '').toString().replace(/^[#＃\s]/g, '').trim();
           const requesterId = payload.requesterId || payload.playerId;
           const requesterNickname = payload.requesterNickname || payload.nickname || 'プレイヤー';
           const isVcOn = payload.isVcOn !== false;
@@ -606,66 +688,35 @@ wss.on('connection', (ws) => {
             }));
           }
 
-          // If requester is already host or member, immediately approve
-          if (room.hostId === requesterId || room.players.has(requesterId)) {
-            clientRoomCode = code;
-            clientPlayerId = requesterId;
-            room.players.set(requesterId, {
-              id: requesterId,
-              nickname: requesterNickname,
-              isHost: room.hostId === requesterId,
-              isAlive: true,
-              isVcOn,
-              isMuted: false,
-              isSpeaking: false,
-              joinedAt: Date.now()
-            });
-            room.sockets.set(requesterId, ws);
-            const snap = getRoomSnapshot(room);
-            ws.send(JSON.stringify({ type: 'JOIN_REQUEST_APPROVED', payload: snap }));
-            broadcastToRoom(code, { type: 'ROOM_UPDATE', payload: snap }, ws);
-            broadcastActiveRoomsList();
-            break;
-          }
-
-          if (!room.pendingRequests) room.pendingRequests = new Map();
-          room.pendingRequests.set(requesterId, {
-            requesterId,
+          // Direct immediate join (ユーザー指示: コード入力の時招待はいらない、即入室)
+          clientRoomCode = code;
+          clientPlayerId = requesterId;
+          room.players.set(requesterId, {
+            id: requesterId,
             nickname: requesterNickname,
+            isHost: room.hostId === requesterId,
+            isAlive: true,
             isVcOn,
-            ws,
-            timestamp: Date.now()
+            isMuted: false,
+            isSpeaking: false,
+            joinedAt: Date.now()
           });
+          room.sockets.set(requesterId, ws);
+          if (room.pendingRequests) room.pendingRequests.delete(requesterId);
 
-          ws._pendingRoomCode = code;
-          ws._pendingRequesterId = requesterId;
-
-          // Notify requester: request is waiting for host approval
-          ws.send(JSON.stringify({
-            type: 'JOIN_REQUEST_PENDING',
+          const snap = getRoomSnapshot(room);
+          ws.send(JSON.stringify({ type: 'JOIN_REQUEST_APPROVED', payload: snap }));
+          ws.send(JSON.stringify({ type: 'ROOM_JOINED', payload: snap }));
+          broadcastToRoom(code, { type: 'ROOM_UPDATE', payload: snap }, ws);
+          broadcastToRoom(code, {
+            type: 'PEER_JOINED',
             payload: {
-              roomCode: code,
-              hostNickname: room.hostNickname || 'ホスト',
-              message: `ホスト（${room.hostNickname || 'ホスト'}）に参加申請を送りました。承認をお待ちください...`
+              peerId: requesterId,
+              nickname: requesterNickname,
+              isVcOn
             }
-          }));
-
-          // Notify host in real-time!
-          const hostWs = room.sockets.get(room.hostId);
-          if (hostWs && hostWs.readyState === WebSocket.OPEN) {
-            hostWs.send(JSON.stringify({
-              type: 'JOIN_REQUEST_RECEIVED',
-              payload: {
-                roomCode: code,
-                requesterId,
-                requesterNickname,
-                timestamp: Date.now()
-              }
-            }));
-          }
-
-          // Broadcast room update so host UI shows the pending request
-          broadcastToRoom(code, { type: 'ROOM_UPDATE', payload: getRoomSnapshot(room) });
+          }, ws);
+          broadcastActiveRoomsList();
           break;
         }
 

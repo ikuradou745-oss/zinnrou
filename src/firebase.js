@@ -138,8 +138,178 @@ export async function fetchPlayerProfile(playerId) {
 
 // --- Online Werewolf Room Management Helpers ---
 
+export function normalizeRoomData(data, docId, collectionName = 'jinrou_rooms') {
+  if (!data) return null;
+  const rawCode = data.code ?? data.roomCode ?? data.id ?? docId;
+  const code = String(rawCode).replace(/^[#＃\s]/g, '').trim();
+
+  const hostNickname = data.hostNickname || data.hostName || data.host || data.owner || data.creator || 'ホスト';
+  const hostId = data.hostId || data.ownerId || ('host_' + code);
+
+  const rawStatus = (data.status || 'waiting').toString().toLowerCase();
+  let status = 'waiting';
+  if (rawStatus === 'in_game' || rawStatus === 'playing' || rawStatus === 'started') {
+    status = 'in_game';
+  } else if (rawStatus === 'finished' || rawStatus === 'ended' || rawStatus === 'closed') {
+    status = 'finished';
+  }
+
+  const maxPlayers = Number(data.maxPlayers || data.max || data.capacity) || 5;
+  const discussionTime = Number(data.discussionTime || data.time || data.discussion) || 60;
+  const roleMode = (data.roleMode || 'normal') === 'original' ? 'original' : 'normal';
+
+  // Normalize players dictionary
+  let players = {};
+  if (data.players && typeof data.players === 'object') {
+    if (Array.isArray(data.players)) {
+      data.players.forEach((p, idx) => {
+        const pId = (p && p.id) ? String(p.id) : `p_${idx}`;
+        players[pId] = (typeof p === 'object' && p !== null) ? {
+          id: pId,
+          nickname: p.nickname || p.name || `プレイヤー${idx + 1}`,
+          isHost: p.isHost ?? (idx === 0),
+          isLeader: p.isLeader ?? (idx === 0),
+          role: p.role || null,
+          isAlive: p.isAlive !== false,
+          isOnline: p.isOnline !== false,
+          isVcOn: p.isVcOn !== false,
+          isMuted: !!p.isMuted,
+          isSpeaking: !!p.isSpeaking,
+          joinedAt: p.joinedAt || Date.now()
+        } : {
+          id: pId,
+          nickname: String(p),
+          isHost: idx === 0,
+          isLeader: idx === 0,
+          role: null,
+          isAlive: true,
+          isOnline: true,
+          isVcOn: true,
+          isMuted: false,
+          isSpeaking: false,
+          joinedAt: Date.now()
+        };
+      });
+    } else {
+      for (const [pId, p] of Object.entries(data.players)) {
+        if (p && typeof p === 'object') {
+          players[pId] = {
+            id: pId,
+            nickname: p.nickname || p.name || 'プレイヤー',
+            isHost: p.isHost ?? (pId === hostId),
+            isLeader: p.isLeader ?? (pId === hostId),
+            role: p.role || null,
+            isAlive: p.isAlive !== false,
+            isOnline: p.isOnline !== false,
+            isVcOn: p.isVcOn !== false,
+            isMuted: !!p.isMuted,
+            isSpeaking: !!p.isSpeaking,
+            joinedAt: p.joinedAt || Date.now()
+          };
+        }
+      }
+    }
+  }
+
+  // Ensure host exists in players
+  if (Object.keys(players).length === 0) {
+    players[hostId] = {
+      id: hostId,
+      nickname: hostNickname,
+      isHost: true,
+      isLeader: true,
+      role: null,
+      isAlive: true,
+      isOnline: true,
+      isVcOn: true,
+      isMuted: false,
+      isSpeaking: false,
+      joinedAt: Date.now()
+    };
+  }
+
+  const members = Object.values(players).map(p => ({
+    id: p.id,
+    nickname: p.nickname,
+    isHost: !!p.isHost,
+    isOnline: p.isOnline !== false
+  }));
+
+  const playerCount = Object.keys(players).length;
+
+  return {
+    ...data,
+    code,
+    docId: docId || code,
+    collectionName,
+    hostId,
+    hostNickname,
+    status,
+    maxPlayers,
+    discussionTime,
+    roleMode,
+    rolesConfig: data.rolesConfig || {},
+    rolesList: data.rolesList || [],
+    players,
+    members,
+    playerCount
+  };
+}
+
+export async function findFirestoreRoom(roomCode) {
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+  if (!cleanCode) return null;
+
+  const targetCollections = ['jinrou_rooms', 'rooms'];
+
+  // 1. Direct doc lookup by ID in both collections
+  for (const col of targetCollections) {
+    try {
+      const snap = await getDoc(doc(db, col, cleanCode));
+      if (snap && snap.exists()) {
+        const norm = normalizeRoomData(snap.data(), snap.id, col);
+        if (norm) return norm;
+      }
+    } catch (e) {
+      console.warn(`[findFirestoreRoom] getDoc ${col}/${cleanCode}:`, e.message);
+    }
+  }
+
+  // 2. Scan documents in both collections (handles any custom doc ID or fields created via Firebase Console)
+  for (const col of targetCollections) {
+    try {
+      const snap = await getDocs(collection(db, col));
+      for (const d of snap.docs) {
+        const norm = normalizeRoomData(d.data(), d.id, col);
+        if (norm && (norm.code === cleanCode || d.id === cleanCode || d.id === `#${cleanCode}`)) {
+          return norm;
+        }
+      }
+    } catch (e) {
+      console.warn(`[findFirestoreRoom] scan ${col}:`, e.message);
+    }
+  }
+
+  // 3. Fallback: check Express Server API
+  try {
+    const res = await fetch(`/api/jinrou/rooms/${cleanCode}`);
+    if (res.ok) {
+      const srvData = await res.json();
+      return normalizeRoomData(srvData, cleanCode, 'server');
+    }
+  } catch (e) {}
+
+  // 4. Fallback: check local memory
+  const localData = getRoomLocally(cleanCode);
+  if (localData) {
+    return normalizeRoomData(localData, cleanCode, 'local');
+  }
+
+  return null;
+}
+
 export async function createFirestoreRoom(roomCode, hostId, hostNickname, settings = {}) {
-  const cleanCode = (roomCode || '').toString().replace(/^[#＃]/, '').trim();
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
   const maxPlayers = Number(settings.maxPlayers) || 5;
   const roleMode = settings.roleMode || 'normal';
   const rolesConfig = settings.rolesConfig || {};
@@ -181,7 +351,8 @@ export async function createFirestoreRoom(roomCode, hostId, hostNickname, settin
     },
     members: [
       { id: hostId, nickname: hostNickname, isHost: true, isOnline: true }
-    ]
+    ],
+    playerCount: 1
   };
 
   // 1. Immediately store in local memory & storage so UI is instantaneous
@@ -196,54 +367,31 @@ export async function createFirestoreRoom(roomCode, hostId, hostNickname, settin
     }).catch(e => console.warn("[Server Sync] Notice on room create:", e.message));
   } catch (e) {}
 
-  // 3. Save to Firebase Firestore
-  try {
-    const roomRef = doc(db, "jinrou_rooms", cleanCode);
-    await setDoc(roomRef, {
-      ...roomData,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-    console.log("[Firebase] Room created successfully in Firestore:", cleanCode);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `jinrou_rooms/${cleanCode}`);
+  // 3. Save to Firebase Firestore (write to both jinrou_rooms and rooms for total console compatibility)
+  const targetCollections = ['jinrou_rooms', 'rooms'];
+  for (const col of targetCollections) {
+    try {
+      const roomRef = doc(db, col, cleanCode);
+      await setDoc(roomRef, {
+        ...roomData,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      console.log(`[Firebase] Room created successfully in Firestore: ${col}/${cleanCode}`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `${col}/${cleanCode}`);
+    }
   }
 
   return roomData;
 }
 
 export async function joinFirestoreRoom(roomCode, playerId, playerNickname, isVcOn = true) {
-  const cleanCode = (roomCode || '').toString().replace(/^[#＃]/, '').trim();
-  let roomData = null;
-
-  // 1. Check Firebase Firestore directly first
-  try {
-    const roomRef = doc(db, "jinrou_rooms", cleanCode);
-    const snap = await getDoc(roomRef);
-    if (snap && snap.exists()) {
-      roomData = snap.data();
-    }
-  } catch (e) {
-    handleFirestoreError(e, OperationType.GET, `jinrou_rooms/${cleanCode}`);
-  }
-
-  // 2. Check Express server API if not found in Firestore
-  if (!roomData) {
-    try {
-      const res = await fetch(`/api/jinrou/rooms/${cleanCode}`);
-      if (res.ok) {
-        roomData = await res.json();
-      }
-    } catch (e) {}
-  }
-
-  // 3. Fallback: check local cache
-  if (!roomData) {
-    roomData = getRoomLocally(cleanCode);
-  }
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const roomData = await findFirestoreRoom(cleanCode);
 
   if (!roomData) {
-    throw new Error(`部屋（#${cleanCode}）が見つかりませんでした。コードをご確認ください。`);
+    throw new Error(`部屋（#${cleanCode}）が見つかりませんでした。コードをご確認いただくか、新しく部屋を作成してください。`);
   }
 
   if (roomData.status !== "waiting") {
@@ -287,8 +435,10 @@ export async function joinFirestoreRoom(roomCode, playerId, playerNickname, isVc
 
   const updatedRoom = {
     ...roomData,
+    code: cleanCode,
     players: updatedPlayers,
     members: updatedMembers,
+    playerCount: Object.keys(updatedPlayers).length,
     updatedAt: now
   };
 
@@ -304,78 +454,120 @@ export async function joinFirestoreRoom(roomCode, playerId, playerNickname, isVc
     }).catch(() => {});
   } catch (e) {}
 
-  // Sync to Firebase Firestore
-  try {
-    const roomRef = doc(db, "jinrou_rooms", cleanCode);
-    await setDoc(roomRef, {
-      players: updatedPlayers,
-      members: updatedMembers,
-      updatedAt: serverTimestamp()
-    }, { merge: true });
-    console.log("[Firebase] Player joined room in Firestore:", cleanCode);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, `jinrou_rooms/${cleanCode}`);
+  // Sync to Firebase Firestore (write to both jinrou_rooms and rooms if present)
+  const targetCollections = ['jinrou_rooms', 'rooms'];
+  for (const col of targetCollections) {
+    try {
+      const docId = (roomData.collectionName === col && roomData.docId) ? roomData.docId : cleanCode;
+      const roomRef = doc(db, col, docId);
+      await setDoc(roomRef, {
+        players: updatedPlayers,
+        members: updatedMembers,
+        playerCount: Object.keys(updatedPlayers).length,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      console.log(`[Firebase] Player joined room in Firestore: ${col}/${docId}`);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `${col}/${cleanCode}`);
+    }
   }
 
   return updatedRoom;
 }
 
 export async function fetchActiveFirestoreRooms() {
-  const roomsList = [];
-  try {
-    const q = collection(db, "jinrou_rooms");
-    const snapshot = await getDocs(q);
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (data && data.code && data.status !== 'finished') {
-        const count = data.players ? Object.keys(data.players).length : (data.members ? data.members.length : 0);
-        roomsList.push({
-          code: data.code,
-          hostNickname: data.hostNickname || 'ホスト',
-          playerCount: count,
-          maxPlayers: data.maxPlayers || 5,
-          roleMode: data.roleMode || 'normal',
-          discussionTime: data.discussionTime || 60,
-          status: data.status || 'waiting'
-        });
-      }
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.LIST, "jinrou_rooms");
-  }
-  return roomsList;
-}
+  const roomsMap = new Map();
+  const targetCollections = ['jinrou_rooms', 'rooms'];
 
-// Real-Time subscription for all active rooms in Firestore
-export function subscribeToActiveRooms(onUpdate, onError) {
-  try {
-    const q = collection(db, "jinrou_rooms");
-    return onSnapshot(q, (snapshot) => {
-      const roomsList = [];
+  for (const col of targetCollections) {
+    try {
+      const snapshot = await getDocs(collection(db, col));
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data && data.code && data.status !== 'finished') {
-          const count = data.players ? Object.keys(data.players).length : (data.members ? data.members.length : 0);
-          roomsList.push({
-            code: data.code,
-            hostNickname: data.hostNickname || 'ホスト',
-            playerCount: count,
-            maxPlayers: data.maxPlayers || 5,
-            roleMode: data.roleMode || 'normal',
-            discussionTime: data.discussionTime || 60,
-            status: data.status || 'waiting'
-          });
+        const norm = normalizeRoomData(docSnap.data(), docSnap.id, col);
+        if (norm && norm.code && norm.status !== 'finished') {
+          if (!roomsMap.has(norm.code) || roomsMap.get(norm.code).playerCount < norm.playerCount) {
+            roomsMap.set(norm.code, {
+              code: norm.code,
+              docId: norm.docId,
+              collectionName: norm.collectionName,
+              hostNickname: norm.hostNickname || 'ホスト',
+              playerCount: norm.playerCount,
+              maxPlayers: norm.maxPlayers || 5,
+              roleMode: norm.roleMode || 'normal',
+              discussionTime: norm.discussionTime || 60,
+              status: norm.status || 'waiting'
+            });
+          }
         }
       });
-      onUpdate(roomsList);
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, "jinrou_rooms");
-      if (typeof onError === 'function') onError(err);
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.LIST, "jinrou_rooms");
-    return () => {};
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, col);
+    }
   }
+
+  return Array.from(roomsMap.values());
+}
+
+// Real-Time subscription for all active rooms in Firestore (listens to both jinrou_rooms and rooms)
+export function subscribeToActiveRooms(onUpdate, onError) {
+  let isUnsubscribed = false;
+  const colRoomsMap = new Map(); // col => Map of code => roomSummary
+
+  function emitCombined() {
+    if (isUnsubscribed) return;
+    const combined = new Map();
+    for (const [, roomMap] of colRoomsMap.entries()) {
+      for (const [code, item] of roomMap.entries()) {
+        if (!combined.has(code) || combined.get(code).playerCount < item.playerCount) {
+          combined.set(code, item);
+        }
+      }
+    }
+    onUpdate(Array.from(combined.values()));
+  }
+
+  const unsubs = [];
+  const targetCollections = ['jinrou_rooms', 'rooms'];
+
+  targetCollections.forEach((col) => {
+    try {
+      const q = collection(db, col);
+      const unsub = onSnapshot(q, (snapshot) => {
+        const colMap = new Map();
+        snapshot.forEach((docSnap) => {
+          const norm = normalizeRoomData(docSnap.data(), docSnap.id, col);
+          if (norm && norm.code && norm.status !== 'finished') {
+            colMap.set(norm.code, {
+              code: norm.code,
+              docId: norm.docId,
+              collectionName: norm.collectionName,
+              hostNickname: norm.hostNickname || 'ホスト',
+              playerCount: norm.playerCount,
+              maxPlayers: norm.maxPlayers || 5,
+              roleMode: norm.roleMode || 'normal',
+              discussionTime: norm.discussionTime || 60,
+              status: norm.status || 'waiting'
+            });
+          }
+        });
+        colRoomsMap.set(col, colMap);
+        emitCombined();
+      }, (err) => {
+        handleFirestoreError(err, OperationType.LIST, col);
+        if (typeof onError === 'function') onError(err);
+      });
+      unsubs.push(unsub);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, col);
+    }
+  });
+
+  return () => {
+    isUnsubscribed = true;
+    unsubs.forEach((fn) => {
+      try { fn(); } catch (e) {}
+    });
+  };
 }
 
 // Real-Time presence heartbeat for a player in a room
@@ -395,7 +587,7 @@ export async function updatePlayerHeartbeat(roomCode, playerId) {
 }
 
 export function subscribeToRoom(roomCode, onUpdate, onError) {
-  const cleanCode = (roomCode || '').toString().replace(/^[#＃]/, '').trim();
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
   let isUnsubscribed = false;
 
   // 1. Initial fire from local cache
@@ -423,29 +615,33 @@ export function subscribeToRoom(roomCode, onUpdate, onError) {
       const res = await fetch(`/api/jinrou/rooms/${cleanCode}`);
       if (res.ok) {
         const data = await res.json();
-        saveRoomLocally(data);
-        onUpdate(data);
+        const norm = normalizeRoomData(data, cleanCode, 'server');
+        saveRoomLocally(norm);
+        onUpdate(norm);
       }
     } catch (e) {}
   }, 2500);
 
-  // 4. Firestore onSnapshot real-time subscription
-  let firestoreUnsub = () => {};
-  try {
-    const roomRef = doc(db, "jinrou_rooms", cleanCode);
-    firestoreUnsub = onSnapshot(roomRef, (docSnap) => {
-      if (isUnsubscribed) return;
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        saveRoomLocally(data);
-        onUpdate(data);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `jinrou_rooms/${cleanCode}`);
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, `jinrou_rooms/${cleanCode}`);
-  }
+  // 4. Firestore onSnapshot real-time subscription on both collections
+  const unsubs = [];
+  ['jinrou_rooms', 'rooms'].forEach(col => {
+    try {
+      const roomRef = doc(db, col, cleanCode);
+      const unsub = onSnapshot(roomRef, (docSnap) => {
+        if (isUnsubscribed) return;
+        if (docSnap.exists()) {
+          const norm = normalizeRoomData(docSnap.data(), docSnap.id, col);
+          saveRoomLocally(norm);
+          onUpdate(norm);
+        }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, `${col}/${cleanCode}`);
+      });
+      unsubs.push(unsub);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `${col}/${cleanCode}`);
+    }
+  });
 
   return () => {
     isUnsubscribed = true;
@@ -453,14 +649,14 @@ export function subscribeToRoom(roomCode, onUpdate, onError) {
     if (roomBroadcastChannel) {
       roomBroadcastChannel.removeEventListener("message", handleBroadcast);
     }
-    if (typeof firestoreUnsub === "function") {
-      firestoreUnsub();
-    }
+    unsubs.forEach(fn => {
+      try { fn(); } catch (e) {}
+    });
   };
 }
 
 export async function leaveFirestoreRoom(roomCode, playerId) {
-  const cleanCode = (roomCode || '').toString().replace(/^[#＃]/, '').trim();
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
   const room = getRoomLocally(cleanCode);
   if (room && room.players) {
     delete room.players[playerId];
@@ -491,39 +687,42 @@ export async function leaveFirestoreRoom(roomCode, playerId) {
     }).catch(() => {});
   } catch (e) {}
 
-  // Call Firestore
-  try {
-    const roomRef = doc(db, "jinrou_rooms", cleanCode);
-    const snap = await getDoc(roomRef);
-    if (snap && snap.exists()) {
-      const data = snap.data();
-      const players = { ...(data.players || {}) };
-      delete players[playerId];
-      const remainingIds = Object.keys(players);
-      if (remainingIds.length === 0) {
-        await deleteDoc(roomRef);
-      } else {
-        let hostId = data.hostId;
-        if (hostId === playerId) {
-          hostId = remainingIds[0];
-          players[hostId].isHost = true;
-          players[hostId].isLeader = true;
+  // Update in Firestore across both collections
+  const targetCollections = ['jinrou_rooms', 'rooms'];
+  for (const col of targetCollections) {
+    try {
+      const roomRef = doc(db, col, cleanCode);
+      const snap = await getDoc(roomRef);
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        const players = { ...(data.players || {}) };
+        delete players[playerId];
+        const remainingIds = Object.keys(players);
+        if (remainingIds.length === 0) {
+          await deleteDoc(roomRef);
+        } else {
+          let hostId = data.hostId;
+          if (hostId === playerId) {
+            hostId = remainingIds[0];
+            players[hostId].isHost = true;
+            players[hostId].isLeader = true;
+          }
+          const updatedMembers = remainingIds.map(id => ({
+            id,
+            nickname: players[id].nickname,
+            isHost: (id === hostId),
+            isOnline: players[id].isOnline !== false
+          }));
+          await updateDoc(roomRef, {
+            hostId,
+            players,
+            members: updatedMembers,
+            updatedAt: serverTimestamp()
+          });
         }
-        const updatedMembers = remainingIds.map(id => ({
-          id,
-          nickname: players[id].nickname,
-          isHost: (id === hostId),
-          isOnline: players[id].isOnline !== false
-        }));
-        await updateDoc(roomRef, {
-          hostId,
-          players,
-          members: updatedMembers,
-          updatedAt: serverTimestamp()
-        });
       }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `${col}/${cleanCode}`);
     }
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `jinrou_rooms/${cleanCode}`);
   }
 }

@@ -21,12 +21,19 @@ service cloud.firestore {
 
     // Online werewolf rooms and real-time state synchronization
     match /jinrou_rooms/{roomCode} {
-      allow read: if true;
-      allow create, update: if roomCode is string && roomCode.size() <= 32;
-      allow delete: if roomCode is string && roomCode.size() <= 32;
+      allow read, write: if true;
 
       match /{subcollection=**} {
-        allow read, write: if roomCode is string && roomCode.size() <= 32;
+        allow read, write: if true;
+      }
+    }
+
+    // Support standard 'rooms' collection as well for Firebase Console flexibility
+    match /rooms/{roomCode} {
+      allow read, write: if true;
+
+      match /{subcollection=**} {
+        allow read, write: if true;
       }
     }
   }

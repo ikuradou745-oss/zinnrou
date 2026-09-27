@@ -1667,15 +1667,15 @@
 
       <!-- View: Real-Time Active Rooms List & Join (ユーザー要望: 現在作られている部屋を見る、その部屋に入るボタンでホストに通知、許可されたら入室) -->
       <div id="onlineJoinRoomView" style="display: none;">
-        <!-- 1. Direct Room Code Input Option (No host approval needed) -->
+        <!-- 1. Direct Room Code Input Option (No host approval or invite needed) -->
         <div style="background: #f8fafc; border: 1.5px solid var(--border-color); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px;">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
             <div style="font-size: 0.92rem; font-weight: 900; color: var(--text-main);">
-              🔑 部屋コードで入室 <span style="font-size: 0.74rem; background: var(--emerald-light); color: var(--emerald); font-weight: 800; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">ホスト申請不要 (即入室)</span>
+              🔑 部屋コードで入室 <span style="font-size: 0.74rem; background: var(--emerald-light); color: var(--emerald); font-weight: 800; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">招待・申請不要 (即入室)</span>
             </div>
           </div>
           <p style="font-size: 0.78rem; color: var(--text-sub); margin-bottom: 10px; line-height: 1.4;">
-            友達から共有された4桁のコードを入力すれば、ホストの承認なしで直接部屋に入れます。
+            部屋コードを入力して「直接入室」を押すと、招待や承認待ちなしですぐに入室できます。
           </p>
           <div style="display: flex; gap: 8px;">
             <input 
@@ -1683,9 +1683,8 @@
               id="roomCodeInput" 
               class="text-input" 
               placeholder="例: 1234 (#1234も可)" 
-              maxlength="8" 
-              pattern="[0-9#＃]*"
-              inputmode="numeric"
+              maxlength="16" 
+              pattern="[0-9#＃a-zA-Z_-]*"
               style="letter-spacing: 0.12em; font-weight: 900; font-size: 1.15rem; text-align: center;"
             />
             <button class="btn-primary" id="btnJoinRoomSubmit" style="flex: 0 0 115px; font-weight: 900; padding: 10px 14px;">直接入室</button>
@@ -1693,15 +1692,15 @@
           <div class="input-error-msg" id="joinRoomErrorMsg" style="margin-top: 6px;"></div>
         </div>
 
-        <!-- 2. Online Rooms List (Host approval required) -->
+        <!-- 2. Online Rooms List (Direct instant entry) -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <div>
             <h3 style="font-size: 0.95rem; font-weight: 900; color: var(--text-main); margin-bottom: 2px;">
-              🌐 オンライン公開部屋を探す <span style="font-size: 0.72rem; background: var(--sky-light); color: var(--sky); font-weight: 800; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">ホスト承認制</span>
+              🌐 オンライン公開部屋を探す <span style="font-size: 0.72rem; background: var(--emerald-light); color: var(--emerald); font-weight: 800; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">リアルタイム即時入室</span>
             </h3>
             <div style="display: flex; align-items: center; gap: 6px;">
               <span class="live-pulse-dot"></span>
-              <span style="font-size: 0.72rem; color: var(--emerald); font-weight: 800;">Firebase / サーバー常時同期中</span>
+              <span style="font-size: 0.72rem; color: var(--emerald); font-weight: 800;">🔥 Firebase Firestore リアルタイム常時同期中</span>
             </div>
           </div>
           <button type="button" class="btn-secondary" id="btnRefreshRoomsList" style="padding: 6px 12px; font-size: 0.78rem; font-weight: 800;">
@@ -1710,7 +1709,7 @@
         </div>
 
         <p style="font-size: 0.78rem; color: var(--text-sub); line-height: 1.4; margin-bottom: 12px;">
-          オンライン一覧から入る場合は「ホストに申請して入る」を押してください。ホストが許可すると入室できます。
+          公開中の部屋一覧です。入りたい部屋の「🚪 今すぐ入室」を押すだけで直接参加できます（招待不要）。
         </p>
 
         <div id="realtimeRoomsList" class="realtime-rooms-container">

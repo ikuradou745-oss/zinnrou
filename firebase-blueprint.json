@@ -112,6 +112,10 @@
       "schema": "JinrouRoom",
       "description": "Stores online werewolf rooms and real-time game states"
     },
+    "/rooms/{roomCode}": {
+      "schema": "JinrouRoom",
+      "description": "Alternative rooms collection path for Firebase Console compatibility"
+    },
     "/test/{testId}": {
       "schema": "TestConnection",
       "description": "Testing collection for Firestore health check"
