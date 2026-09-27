@@ -1581,6 +1581,10 @@
             🔊 テスト再生
           </button>
         </div>
+
+        <button type="button" class="btn-secondary" id="btnSettingsForceVc" style="width: 100%; margin-top: 12px; padding: 10px 14px; font-size: 0.84rem; font-weight: 900; color: var(--crimson); border-color: rgba(225,29,72,0.35); background: var(--crimson-light);">
+          ⚡ VC強制再接続・端末音声設定（マイク切替・感度テスト）
+        </button>
       </div>
 
       <div class="modal-actions-bar">
@@ -1834,6 +1838,9 @@
             <span id="lobbyMicIcon">🎙️</span>
             <span id="lobbyMicLabel">マイク: ON</span>
           </button>
+          <button type="button" class="btn-secondary" id="btnLobbyForceVc" title="VCが繋がらない時の強制再接続・端末設定" style="padding: 5px 10px; font-size: 0.74rem; font-weight: 800; color: var(--crimson); border-color: rgba(225,29,72,0.35); background: var(--crimson-light); border-radius: 9999px;">
+            ⚡ VC強制設定
+          </button>
           <span class="speaking-indicator-ring" id="lobbySpeakingRing" title="発話状態"></span>
           <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: auto;">待機中通話中</span>
         </div>
@@ -1919,6 +1926,88 @@
     </div>
   </div>
 
+  <!-- Force VC & Device Settings Modal (ユーザー要望: vcができない時、vcを強制的にする、端末内の設定を変更することができる) -->
+  <div class="modal-overlay" id="forceVcModal">
+    <div class="modal-card" style="max-width: 500px; text-align: left;">
+      <div class="modal-header">
+        <h2 class="modal-title">⚡ VC強制再接続・端末音声設定</h2>
+        <button class="btn-modal-close" id="btnCloseForceVc" aria-label="閉じる">✕</button>
+      </div>
+
+      <p style="font-size: 0.82rem; color: var(--text-sub); margin-bottom: 14px; line-height: 1.5;">
+        「相手の声が聞こえない」「自分の声が届かない」「マイク許可が弾かれた」場合に、端末のマイク・スピーカーの切替やWebRTC通話の強制再起動を行えます。
+      </p>
+
+      <!-- 1. Permission status badge -->
+      <div style="display: flex; align-items: center; justify-content: space-between; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 14px; margin-bottom: 14px;">
+        <span style="font-size: 0.84rem; font-weight: 800; color: var(--text-main);">マイク権限ステータス:</span>
+        <span id="forceVcPermBadge" style="font-size: 0.78rem; font-weight: 900; padding: 3px 8px; border-radius: 6px; background: var(--emerald-light); color: var(--emerald);">
+          確認中...
+        </span>
+      </div>
+
+      <!-- 2. Audio Input Device (Microphone) Selection -->
+      <div class="form-group" style="margin-bottom: 12px;">
+        <label class="form-label" for="forceVcInputSelect">
+          🎙️ マイク入力デバイス（端末内マイク切替）
+        </label>
+        <select id="forceVcInputSelect" class="text-input" style="padding: 10px 12px; font-size: 0.88rem; font-weight: 700; cursor: pointer; background: #ffffff;">
+          <option value="">デフォルトマイク</option>
+        </select>
+      </div>
+
+      <!-- 3. Audio Output Device (Speaker / Earphone) Selection -->
+      <div class="form-group" style="margin-bottom: 14px;">
+        <label class="form-label" for="forceVcOutputSelect">
+          🔊 スピーカー・イヤホン出力先
+        </label>
+        <select id="forceVcOutputSelect" class="text-input" style="padding: 10px 12px; font-size: 0.88rem; font-weight: 700; cursor: pointer; background: #ffffff;">
+          <option value="">デフォルトスピーカー</option>
+        </select>
+        <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
+          <button type="button" class="btn-secondary" id="btnForceVcTestSpeaker" style="padding: 5px 12px; font-size: 0.78rem; font-weight: 800;">
+            🔊 出力テスト音を鳴らす
+          </button>
+        </div>
+      </div>
+
+      <!-- 4. Real-time Mic Sensitivity / Volume Meter -->
+      <div style="background: #f1f5f9; border: 1px solid var(--border-color); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 0.82rem; font-weight: 800; color: var(--text-main);">🎤 リアルタイムマイク感度テスト</span>
+          <span id="forceVcMeterVal" style="font-size: 0.8rem; font-weight: 900; color: var(--sky);">0%</span>
+        </div>
+        <div style="width: 100%; height: 12px; background: #e2e8f0; border-radius: 9999px; overflow: hidden; position: relative;">
+          <div id="forceVcMeterBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #10b981 0%, #0284c7 70%, #e11d48 100%); transition: width 0.08s ease; border-radius: 9999px;"></div>
+        </div>
+        <div id="forceVcMeterNotice" style="font-size: 0.74rem; color: var(--text-muted); margin-top: 6px;">
+          ※ 声を発してバーが緑色に伸びるか確認してください
+        </div>
+      </div>
+
+      <!-- 5. Permission / Browser settings instruction accordion -->
+      <details style="background: #fff; border: 1px solid var(--border-color); border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; font-size: 0.78rem; color: var(--text-sub);">
+        <summary style="font-weight: 800; color: var(--text-main); cursor: pointer;">
+          ℹ️ マイクが許可できない時の端末設定変更手順
+        </summary>
+        <div style="margin-top: 8px; line-height: 1.5;">
+          <strong>【Chrome / Edge / PC】</strong><br>
+          URLバー左端の「🔒 鍵マーク」または「表示設定アイコン」をクリック ➔「マイク」を「許可」に変更して再接続を押してください。<br><br>
+          <strong>【iPhone / iPad (Safari)】</strong><br>
+          URLバーの「ぁあ (AA)」または「設定」をタップ ➔「Webサイトの設定」➔「マイク」を「許可」に変更。本体設定の「Safari」➔「マイク」も確認してください。<br><br>
+          <strong>【Android (Chrome)】</strong><br>
+          URLバー右側の「︙」➔「設定」➔「サイトの設定」➔「マイク」から本サイトを許可してください。
+        </div>
+      </details>
+
+      <div class="modal-actions-bar" style="margin-top: 10px;">
+        <button type="button" class="btn-primary" id="btnExecuteForceVc" style="width: 100%; padding: 12px; font-size: 0.95rem; font-weight: 900; background: linear-gradient(135deg, #e11d48 0%, #be123c 100%);">
+          ⚡ 設定を適用してVCを強制再接続
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- 6. Role Announcement Modal (ユーザー要望: 最初は自分の役職が言い渡され、その後に試合スタート) -->
   <div class="modal-overlay" id="roleAnnouncementModal">
     <div class="role-reveal-card" id="roleRevealCard">
@@ -1963,6 +2052,9 @@
         </button>
         <button class="btn-voice-toggle active" id="btnGameMicToggle" style="padding: 4px 8px; font-size: 0.78rem;">
           <span id="gameMicLabel">🎙️ マイクON</span>
+        </button>
+        <button type="button" class="btn-voice-toggle" id="btnGameForceVc" title="VC強制再接続・端末設定" style="padding: 4px 8px; font-size: 0.78rem; font-weight: 800; color: var(--crimson); border-color: rgba(225,29,72,0.35); background: var(--crimson-light);">
+          ⚡ VC強制
         </button>
       </div>
     </div>

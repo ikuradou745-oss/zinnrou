@@ -504,21 +504,11 @@ app.post('/api/jinrou/rooms/:code/join', async (req, res) => {
   res.json(snap);
 });
 
-app.post('/api/jinrou/rooms/:code/leave', (req, res) => {
-  const cleanCode = (req.params.code || '').toString().replace(/^[#＃]/, '').trim();
-  const { playerId } = req.body;
-  const room = rooms.get(cleanCode);
-  if (room) {
-    room.players.delete(playerId);
-    room.sockets.delete(playerId);
-    if (room.pendingRequests) room.pendingRequests.delete(playerId);
-    if (room.players.size === 0) {
-      if (room.timerInterval) clearInterval(room.timerInterval);
-      rooms.delete(cleanCode);
-    } else {
-      broadcastToRoom(cleanCode, { type: 'ROOM_UPDATE', payload: getRoomSnapshot(room) });
-    }
-    broadcastActiveRoomsList();
+app.post('/api/jinrou/rooms/:code/leave', async (req, res) => {
+  const cleanCode = (req.params.code || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const { playerId } = req.body || {};
+  if (cleanCode && playerId) {
+    await handleLeave(null, cleanCode, playerId, true);
   }
   res.json({ success: true });
 });
@@ -997,7 +987,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
+async function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
   // If this socket was waiting on a pending join request in any room, cancel it
   if (ws && ws._pendingRoomCode && ws._pendingRequesterId) {
     const pRoom = rooms.get(ws._pendingRoomCode);
@@ -1007,52 +997,35 @@ function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
     }
   }
 
-  if (!roomCode || !rooms.has(roomCode)) return;
-  const room = rooms.get(roomCode);
-  room.sockets.delete(playerId);
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+  if (!cleanCode || !rooms.has(cleanCode)) return;
+  const room = rooms.get(cleanCode);
 
-  if (isExplicitLeave && playerId) {
+  if (playerId) {
+    room.sockets.delete(playerId);
     room.players.delete(playerId);
-  } else if (playerId && room.players.has(playerId)) {
-    const p = room.players.get(playerId);
-    p.isOnline = false;
   }
 
   if (room.pendingRequests && playerId) {
     room.pendingRequests.delete(playerId);
   }
 
-  const activeSocketsCount = Array.from(room.sockets.values()).filter(s => s && s.readyState === WebSocket.OPEN).length;
-
-  if (room.players.size === 0 || (isExplicitLeave && room.players.size === 0)) {
+  if (room.players.size === 0) {
     if (room.timerInterval) clearInterval(room.timerInterval);
-    rooms.delete(roomCode);
-    console.log(`[jinrou-online] Room #${roomCode} closed (explicit leave).`);
+    if (room._cleanupTimer) clearTimeout(room._cleanupTimer);
+    rooms.delete(cleanCode);
+    console.log(`[jinrou-online] Room #${cleanCode} closed (empty).`);
     broadcastActiveRoomsList();
-  } else if (activeSocketsCount === 0) {
-    // Grace period before closing room on connection drop (allows page reloads)
-    if (!room._cleanupTimer) {
-      room._cleanupTimer = setTimeout(() => {
-        const currentActive = Array.from(room.sockets.values()).filter(s => s && s.readyState === WebSocket.OPEN).length;
-        if (currentActive === 0) {
-          if (room.timerInterval) clearInterval(room.timerInterval);
-          rooms.delete(roomCode);
-          console.log(`[jinrou-online] Room #${roomCode} closed after 60s inactivity.`);
-          broadcastActiveRoomsList();
-        }
-      }, 60000);
+
+    if (firestoreDb) {
+      for (const col of ['jinrou_rooms', 'rooms']) {
+        try {
+          await deleteDoc(doc(firestoreDb, col, cleanCode));
+        } catch (e) {}
+      }
     }
   } else {
-    if (room._cleanupTimer) {
-      clearTimeout(room._cleanupTimer);
-      room._cleanupTimer = null;
-    }
-    broadcastToRoom(roomCode, {
-      type: 'PEER_LEFT',
-      payload: { peerId: playerId }
-    });
-
-    if (room.hostId === playerId && isExplicitLeave) {
+    if (room.hostId === playerId) {
       const nextHostId = room.players.keys().next().value;
       if (nextHostId) {
         room.hostId = nextHostId;
@@ -1063,8 +1036,47 @@ function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
         }
       }
     }
-    broadcastToRoom(roomCode, { type: 'ROOM_UPDATE', payload: getRoomSnapshot(room) });
+    broadcastToRoom(cleanCode, {
+      type: 'PEER_LEFT',
+      payload: { peerId: playerId }
+    });
+    const snap = getRoomSnapshot(room);
+    broadcastToRoom(cleanCode, { type: 'ROOM_UPDATE', payload: snap });
     broadcastActiveRoomsList();
+
+    if (firestoreDb) {
+      for (const col of ['jinrou_rooms', 'rooms']) {
+        try {
+          const roomRef = doc(firestoreDb, col, cleanCode);
+          const fsnap = await getDoc(roomRef);
+          if (fsnap && fsnap.exists()) {
+            const data = fsnap.data();
+            const players = { ...(data.players || {}) };
+            delete players[playerId];
+            const remainingIds = Object.keys(players);
+            if (remainingIds.length === 0) {
+              await deleteDoc(roomRef);
+            } else {
+              let hId = data.hostId;
+              if (hId === playerId) hId = room.hostId;
+              const updatedMembers = remainingIds.map(id => ({
+                id,
+                nickname: players[id]?.nickname || 'プレイヤー',
+                isHost: (id === hId),
+                isOnline: true
+              }));
+              await updateDoc(roomRef, {
+                hostId: hId,
+                hostNickname: room.hostNickname,
+                players,
+                members: updatedMembers,
+                playerCount: remainingIds.length
+              });
+            }
+          }
+        } catch (e) {}
+      }
+    }
   }
 }
 

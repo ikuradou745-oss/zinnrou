@@ -376,11 +376,46 @@ const gameMicLabel = document.getElementById('gameMicLabel');
 
 const globalToast = document.getElementById('globalToast');
 
+// Force VC & Device Settings Elements
+const forceVcModal = document.getElementById('forceVcModal');
+const btnCloseForceVc = document.getElementById('btnCloseForceVc');
+const forceVcPermBadge = document.getElementById('forceVcPermBadge');
+const forceVcInputSelect = document.getElementById('forceVcInputSelect');
+const forceVcOutputSelect = document.getElementById('forceVcOutputSelect');
+const btnForceVcTestSpeaker = document.getElementById('btnForceVcTestSpeaker');
+const forceVcMeterBar = document.getElementById('forceVcMeterBar');
+const forceVcMeterVal = document.getElementById('forceVcMeterVal');
+const forceVcMeterNotice = document.getElementById('forceVcMeterNotice');
+const btnExecuteForceVc = document.getElementById('btnExecuteForceVc');
+const btnSettingsForceVc = document.getElementById('btnSettingsForceVc');
+const btnLobbyForceVc = document.getElementById('btnLobbyForceVc');
+const btnGameForceVc = document.getElementById('btnGameForceVc');
+
 // --- Voice Manager (WebRTC) ---
 const voiceManager = new VoiceManager({
-  onSpeakingChange: (isSpeaking) => updateSpeakingIndicators(localPlayerId, isSpeaking),
-  onPeerVoiceState: (peerId, voiceState) => updateSpeakingIndicators(peerId, voiceState.isSpeaking),
+  onSpeakingChange: (isSpeaking) => {
+    updateSpeakingRing(isSpeaking);
+    updateSpeakingIndicators(localPlayerId, isSpeaking);
+  },
+  onPeerVoiceState: (peerId, voiceState) => {
+    updateSpeakingIndicators(peerId, voiceState.isSpeaking);
+  },
   onRemoteTrack: (peerId, stream) => {},
+  onVolumeLevel: (level) => {
+    if (forceVcModal && forceVcModal.classList.contains('active')) {
+      if (forceVcMeterBar) forceVcMeterBar.style.width = `${level}%`;
+      if (forceVcMeterVal) forceVcMeterVal.textContent = `${level}%`;
+      if (forceVcMeterNotice) {
+        if (level > 18) {
+          forceVcMeterNotice.textContent = '🔊 音声を正常に検知しています！';
+          forceVcMeterNotice.style.color = 'var(--emerald)';
+        } else {
+          forceVcMeterNotice.textContent = '※ マイクに向かって話してバーが伸びるか確認してください';
+          forceVcMeterNotice.style.color = 'var(--text-muted)';
+        }
+      }
+    }
+  },
   onLog: (msg) => showToast(msg)
 });
 voiceManager.setVolume(vcVolume);
@@ -1057,6 +1092,13 @@ function enterLobbyView(roomCode, roomData) {
   topLeftChatContainer.style.display = 'block';
   chatExpandableArea.style.display = 'block';
 
+  // Push browser history state so Browser Back button triggers leaving the room
+  try {
+    if (!history.state || history.state.roomCode !== roomCode) {
+      history.pushState({ inRoom: true, roomCode }, '', window.location.pathname + '#room=' + roomCode);
+    }
+  } catch (e) {}
+
   voiceManager.setSignalSender((msg) => {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(msg));
@@ -1065,6 +1107,16 @@ function enterLobbyView(roomCode, roomData) {
 
   if (voiceManager.isVcEnabled) {
     voiceManager.initLocalAudio();
+  }
+
+  // Connect to peers already present in room
+  if (roomData && roomData.players) {
+    const pIds = Object.keys(roomData.players);
+    for (const pId of pIds) {
+      if (pId !== localPlayerId) {
+        voiceManager.handlePeerJoined(pId, false);
+      }
+    }
   }
 
   updateLobbyUI(roomData);
@@ -1890,26 +1942,185 @@ btnInviteShare.addEventListener('click', () => {
   }
 });
 
-btnLeaveRoom.addEventListener('click', async () => {
+async function leaveCurrentRoom(options = {}) {
+  const code = activeRoomCode;
+  if (!code) return;
+
   stopPresenceHeartbeat();
   if (lobbyUnsubscribe) {
     try { lobbyUnsubscribe(); } catch (e) {}
     lobbyUnsubscribe = null;
   }
-  if (activeRoomCode) {
-    sendWs('LEAVE_ROOM', { code: activeRoomCode, playerId: localPlayerId });
-    await leaveFirestoreRoom(activeRoomCode, localPlayerId);
+
+  // 1. Send WebSocket leave notification
+  sendWs('LEAVE_ROOM', { code, playerId: localPlayerId });
+
+  // 2. Beacon for instantaneous browser unload / back
+  if (navigator.sendBeacon) {
+    try {
+      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(code)}/leave`, JSON.stringify({ playerId: localPlayerId }));
+    } catch (e) {}
   }
+
+  // 3. Sync to Firebase Firestore
+  await leaveFirestoreRoom(code, localPlayerId).catch(() => {});
+
+  // 4. WebRTC voice cleanup
   voiceManager.leaveRoom();
+
   activeRoomCode = null;
   isHost = false;
   currentRoomData = null;
+
   onlineLobbyView.style.display = 'none';
   onlineHubView.style.display = 'block';
   topLeftChatContainer.style.display = 'none';
   gameView.style.display = 'none';
-  showToast('部屋を退出しました');
+  closeModal(onlinePlayModal);
+
+  // If user clicked browser back, clean up url hash without triggering another popstate
+  if (window.location.hash.startsWith('#room=')) {
+    try {
+      history.replaceState(null, '', window.location.pathname);
+    } catch (e) {}
+  }
+
+  if (options.fromBrowserBack) {
+    showToast('🔙 ブラウザバックにより部屋から退出しました');
+  } else {
+    showToast('部屋を退出しました');
+  }
+}
+
+btnLeaveRoom.addEventListener('click', () => leaveCurrentRoom());
+
+// ブラウザバックの検知: 部屋にいる状態でブラウザの「戻る」が押されたら自動で部屋を離脱
+window.addEventListener('popstate', async () => {
+  if (activeRoomCode) {
+    await leaveCurrentRoom({ fromBrowserBack: true });
+  }
 });
+
+// ページ終了・離脱時の即時クリーンアップ
+window.addEventListener('pagehide', () => {
+  if (activeRoomCode && navigator.sendBeacon) {
+    try {
+      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/leave`, JSON.stringify({ playerId: localPlayerId }));
+    } catch (e) {}
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  if (activeRoomCode && navigator.sendBeacon) {
+    try {
+      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/leave`, JSON.stringify({ playerId: localPlayerId }));
+    } catch (e) {}
+  }
+});
+
+// --- Force VC & Device Setup Event Handlers (ユーザー要望: vcができない時、vcを強制的にする、端末内の設定を変更することができる) ---
+async function openForceVcModal() {
+  sound.playClick();
+  if (forceVcPermBadge) {
+    forceVcPermBadge.textContent = '確認中...';
+    forceVcPermBadge.style.background = 'var(--bg-card-subtle)';
+    forceVcPermBadge.style.color = 'var(--text-sub)';
+  }
+
+  await voiceManager.ensureAudioContext();
+  await voiceManager.initLocalAudio();
+
+  const perm = await voiceManager.checkPermissionStatus();
+  if (forceVcPermBadge) {
+    if (perm === 'granted') {
+      forceVcPermBadge.textContent = '✅ 許可済み (正常稼働)';
+      forceVcPermBadge.style.background = 'var(--emerald-light)';
+      forceVcPermBadge.style.color = 'var(--emerald)';
+    } else if (perm === 'denied') {
+      forceVcPermBadge.textContent = '❌ ブロック中 (ブラウザ設定の変更が必要です)';
+      forceVcPermBadge.style.background = 'var(--crimson-light)';
+      forceVcPermBadge.style.color = 'var(--crimson)';
+    } else {
+      forceVcPermBadge.textContent = '⚠️ 要許可・確認';
+      forceVcPermBadge.style.background = 'var(--gold-light)';
+      forceVcPermBadge.style.color = 'var(--gold)';
+    }
+  }
+
+  const { inputs, outputs } = await voiceManager.getAudioDevices();
+  if (forceVcInputSelect) {
+    forceVcInputSelect.innerHTML = inputs.length > 0
+      ? inputs.map(d => `<option value="${d.deviceId}">${d.label}</option>`).join('')
+      : '<option value="">デフォルトマイク</option>';
+    if (voiceManager.selectedInputDeviceId) {
+      forceVcInputSelect.value = voiceManager.selectedInputDeviceId;
+    }
+  }
+
+  if (forceVcOutputSelect) {
+    forceVcOutputSelect.innerHTML = outputs.length > 0
+      ? outputs.map(d => `<option value="${d.deviceId}">${d.label}</option>`).join('')
+      : '<option value="">デフォルトスピーカー</option>';
+    if (voiceManager.selectedOutputDeviceId) {
+      forceVcOutputSelect.value = voiceManager.selectedOutputDeviceId;
+    }
+  }
+
+  openModal(forceVcModal);
+}
+
+if (btnLobbyForceVc) btnLobbyForceVc.addEventListener('click', openForceVcModal);
+if (btnGameForceVc) btnGameForceVc.addEventListener('click', openForceVcModal);
+if (btnSettingsForceVc) btnSettingsForceVc.addEventListener('click', openForceVcModal);
+if (btnCloseForceVc) btnCloseForceVc.addEventListener('click', () => closeModal(forceVcModal));
+
+if (forceVcInputSelect) {
+  forceVcInputSelect.addEventListener('change', async (e) => {
+    const devId = e.target.value;
+    showToast('マイク入力を切り替えています...');
+    await voiceManager.setAudioInputDevice(devId);
+    showToast('🎙️ マイク入力を変更しました');
+  });
+}
+
+if (forceVcOutputSelect) {
+  forceVcOutputSelect.addEventListener('change', async (e) => {
+    const devId = e.target.value;
+    await voiceManager.setAudioOutputDevice(devId);
+    showToast('🔊 スピーカー出力を変更しました');
+  });
+}
+
+if (btnForceVcTestSpeaker) {
+  btnForceVcTestSpeaker.addEventListener('click', () => {
+    sound.playVcTest();
+    showToast('🔊 スピーカーテスト音を再生しました');
+  });
+}
+
+if (btnExecuteForceVc) {
+  btnExecuteForceVc.addEventListener('click', async () => {
+    sound.playClick();
+    btnExecuteForceVc.disabled = true;
+    btnExecuteForceVc.textContent = '⚡ 強制再接続を実行中...';
+    try {
+      const memberIds = currentRoomData ? Object.keys(currentRoomData.players || {}) : [];
+      const ok = await voiceManager.forceRestartVoice(memberIds);
+      closeModal(forceVcModal);
+      if (ok) {
+        sound.playSuccess();
+        showToast('⚡ VCとマイクを強制再起動・再接続しました！');
+      } else {
+        showToast('⚠️ マイク権限を確認し、ブラウザ設定でマイクを許可してください');
+      }
+    } catch (e) {
+      showToast('⚠️ 強制再接続中にエラーが発生しました');
+    } finally {
+      btnExecuteForceVc.disabled = false;
+      btnExecuteForceVc.textContent = '⚡ 設定を適用してVCを強制再接続';
+    }
+  });
+}
 
 // Initial Nickname modal
 initialNicknameInput.addEventListener('input', (e) => {
