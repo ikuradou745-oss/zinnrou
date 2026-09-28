@@ -41,6 +41,12 @@
           "description": "4-digit room code",
           "pattern": "^[0-9]{4}$"
         },
+        "name": {
+          "type": "string",
+          "description": "Custom room name (2-8 characters)",
+          "minLength": 2,
+          "maxLength": 8
+        },
         "hostId": {
           "type": "string",
           "description": "Host player ID"

@@ -48,6 +48,17 @@ try {
   unlockedRoles = [];
 }
 
+// Cross-tab broadcast channel for local peer instant sync
+let roomBroadcastChannel = null;
+if (typeof window !== "undefined" && window.BroadcastChannel) {
+  try {
+    roomBroadcastChannel = new BroadcastChannel("jinrou_rooms_channel");
+  } catch (e) {
+    roomBroadcastChannel = null;
+  }
+}
+const displayedChatMsgIds = new Set();
+
 // Active Room & Game State
 let activeRoomCode = null;
 let isHost = false;
@@ -295,6 +306,9 @@ let currentPromptRequest = null;
 let roomsPollingInterval = null;
 
 // Create Room Settings
+const roomNameInput = document.getElementById('roomNameInput');
+const roomNameCharCounter = document.getElementById('roomNameCharCounter');
+const roomNameErrorMsg = document.getElementById('roomNameErrorMsg');
 const roomPlayerCountSlider = document.getElementById('roomPlayerCountSlider');
 const playerCountDisplay = document.getElementById('playerCountDisplay');
 const roomDiscussionTimeSlider = document.getElementById('roomDiscussionTimeSlider');
@@ -312,6 +326,7 @@ const btnConfirmCreateRoom = document.getElementById('btnConfirmCreateRoom');
 const btnCancelCreateRoom = document.getElementById('btnCancelCreateRoom');
 
 // Lobby View
+const lobbyRoomNameText = document.getElementById('lobbyRoomNameText');
 const lobbyRoomCodeText = document.getElementById('lobbyRoomCodeText');
 const btnCopyRoomCode = document.getElementById('btnCopyRoomCode');
 const lobbyPlayerCount = document.getElementById('lobbyPlayerCount');
@@ -331,6 +346,7 @@ const btnLobbyMicToggle = document.getElementById('btnLobbyMicToggle');
 const lobbyMicIcon = document.getElementById('lobbyMicIcon');
 const lobbyMicLabel = document.getElementById('lobbyMicLabel');
 const lobbySpeakingRing = document.getElementById('lobbySpeakingRing');
+const btnLobbyAddDummy = document.getElementById('btnLobbyAddDummy');
 
 // Top-Left Chat
 const topLeftChatContainer = document.getElementById('topLeftChatContainer');
@@ -354,6 +370,7 @@ const btnConfirmMyRole = document.getElementById('btnConfirmMyRole');
 
 // Game View
 const gameView = document.getElementById('gameView');
+const gameRoomNameText = document.getElementById('gameRoomNameText');
 const gameDayCountText = document.getElementById('gameDayCountText');
 const gamePhaseBadge = document.getElementById('gamePhaseBadge');
 const gamePhaseIcon = document.getElementById('gamePhaseIcon');
@@ -499,7 +516,24 @@ function handleSocketMessage(msg) {
         }
         openModal(onlinePlayModal);
       }
+      if (payload && Array.isArray(payload.chatHistory)) {
+        payload.chatHistory.forEach(m => {
+          appendChatMessage(m.senderName, m.text, m.senderId === localPlayerId ? 'me' : 'other', m.id);
+        });
+      }
       updateLobbyUI(payload);
+      break;
+    }
+    case 'ROOM_CLOSED': {
+      showToast(payload.message || 'ホストが退出したため部屋は解散されました');
+      activeRoomCode = null;
+      isHost = false;
+      currentRoomData = null;
+      onlineLobbyView.style.display = 'none';
+      onlineHubView.style.display = 'block';
+      topLeftChatContainer.style.display = 'none';
+      gameView.style.display = 'none';
+      closeModal(onlinePlayModal);
       break;
     }
     case 'PEER_JOINED': {
@@ -524,7 +558,11 @@ function handleSocketMessage(msg) {
       break;
     }
     case 'CHAT_MESSAGE': {
-      appendChatMessage(payload.senderName, payload.text, payload.senderId === localPlayerId ? 'me' : 'other');
+      const isMe = payload.senderId === localPlayerId;
+      appendChatMessage(payload.senderName, payload.text, isMe ? 'me' : 'other', payload.id);
+      if (!isMe) {
+        sound.playBellSound ? sound.playBellSound() : sound.playClick();
+      }
       break;
     }
     case 'GAME_STARTED': {
@@ -671,8 +709,40 @@ function scheduleProfileSync() {
   savePlayerProfile(localPlayerId, localNickname, vcVolume, userCoins, unlockedRoles);
 }
 
+// Cross-tab message listener for instant local multi-tab sync
+if (roomBroadcastChannel) {
+  roomBroadcastChannel.addEventListener('message', (evt) => {
+    if (evt.data) {
+      if (evt.data.type === 'ROOM_CHAT_SYNC' && evt.data.chatMsg) {
+        const m = evt.data.chatMsg;
+        if (!activeRoomCode || !evt.data.roomCode || activeRoomCode === evt.data.roomCode) {
+          if (m.senderId !== localPlayerId) {
+            appendChatMessage(m.senderName, m.text, 'other', m.id);
+            if (sound.playBellSound) sound.playBellSound(); else sound.playClick();
+          }
+        }
+      } else if (evt.data.type === 'ROOM_DELETED') {
+        if (activeRoomCode && activeRoomCode === evt.data.roomCode) {
+          showToast('ホストが退出したため部屋が解散されました');
+          activeRoomCode = null;
+          isHost = false;
+          currentRoomData = null;
+          onlineLobbyView.style.display = 'none';
+          onlineHubView.style.display = 'block';
+          topLeftChatContainer.style.display = 'none';
+          gameView.style.display = 'none';
+          closeModal(onlinePlayModal);
+        }
+      }
+    }
+  });
+}
+
 // --- Top-Left Chat ---
-function appendChatMessage(senderName, text, type = 'other') {
+function appendChatMessage(senderName, text, type = 'other', msgId = null) {
+  if (msgId && displayedChatMsgIds.has(msgId)) return;
+  if (msgId) displayedChatMsgIds.add(msgId);
+
   const item = document.createElement('div');
   item.className = 'chat-message-item';
   const isMe = type === 'me';
@@ -690,6 +760,9 @@ function appendChatMessage(senderName, text, type = 'other') {
   item.appendChild(textSpan);
   chatMessagesBox.appendChild(item);
   chatMessagesBox.scrollTop = chatMessagesBox.scrollHeight;
+
+  if (chatExpandableArea) chatExpandableArea.style.display = 'block';
+  if (btnChatToggle) btnChatToggle.textContent = '▼';
 }
 
 function sendCurrentChat() {
@@ -697,15 +770,51 @@ function sendCurrentChat() {
   if (!val) return;
   if (val.length > 20) val = val.slice(0, 20); // strict 20 chars
 
+  const msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const myName = localNickname || '自分';
+
+  // 1. Instantly display on sender's screen!
+  appendChatMessage(myName, val, 'me', msgId);
+  sound.playClick();
+
+  // 2. BroadcastChannel for instant local peer tab sync
+  if (roomBroadcastChannel) {
+    try {
+      roomBroadcastChannel.postMessage({
+        type: 'ROOM_CHAT_SYNC',
+        roomCode: activeRoomCode,
+        chatMsg: {
+          id: msgId,
+          senderId: localPlayerId,
+          senderName: myName,
+          text: val,
+          timestamp: Date.now()
+        }
+      });
+    } catch (e) {}
+  }
+
+  // 3. Send over WebSocket if in a room
   if (activeRoomCode) {
     sendWs('CHAT_MESSAGE', {
+      id: msgId,
       roomCode: activeRoomCode,
       senderId: localPlayerId,
-      senderName: localNickname,
+      senderName: myName,
       text: val
     });
-  } else {
-    appendChatMessage(localNickname || '自分', val, 'me');
+
+    // 4. REST endpoint fallback
+    fetch(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: msgId,
+        senderId: localPlayerId,
+        senderName: myName,
+        text: val
+      })
+    }).catch(() => {});
   }
 
   chatInput.value = '';
@@ -959,6 +1068,12 @@ function updateLobbyUI(room) {
   if (!room) return;
   activeRoomCode = room.code;
   lobbyRoomCodeText.textContent = `#${room.code}`;
+  if (lobbyRoomNameText) {
+    lobbyRoomNameText.textContent = room.name || `${room.hostNickname || 'ホスト'}の部屋`;
+  }
+  if (gameRoomNameText) {
+    gameRoomNameText.textContent = room.name || `${room.hostNickname || 'ホスト'}の部屋`;
+  }
 
   const players = Object.values(room.players || {});
   const playerCount = players.length;
@@ -1135,6 +1250,19 @@ function enterLobbyView(roomCode, roomData) {
   });
 }
 
+// Dummy Bot addition for instant testing (一人でも即テストプレイ可能)
+if (btnLobbyAddDummy) {
+  btnLobbyAddDummy.addEventListener('click', async () => {
+    if (!activeRoomCode) return;
+    sound.playClick();
+    showToast('🤖 練習用Botを追加しました (+1人)');
+    sendWs('ADD_DUMMY_PLAYER', { code: activeRoomCode });
+    try {
+      await fetch(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/add-dummy`, { method: 'POST' });
+    } catch (e) {}
+  });
+}
+
 // Start Game from Lobby
 btnLobbyStartGame.addEventListener('click', () => {
   const currentCount = currentRoomData ? Object.keys(currentRoomData.players || {}).length : 1;
@@ -1151,6 +1279,7 @@ btnLobbyStartGame.addEventListener('click', () => {
 // --- Role Announcement Phase (ユーザー要望: 最初は自分の役職が言い渡され、その後に試合スタート) ---
 function showRoleAnnouncement(roleId, room) {
   closeModal(onlinePlayModal);
+  if (topLeftChatContainer) topLeftChatContainer.style.display = 'block';
   const r = ALL_ROLES_MAP[roleId] || BASE_ROLES[1];
 
   revealRoleIcon.textContent = r.icon;
@@ -1167,6 +1296,7 @@ function showRoleAnnouncement(roleId, room) {
     sound.playSuccess();
     closeModal(roleAnnouncementModal);
     gameView.style.display = 'flex';
+    if (topLeftChatContainer) topLeftChatContainer.style.display = 'block';
     myRoleName.textContent = r.name;
     myRoleIcon.textContent = r.icon;
     myRoleDesc.textContent = r.desc;
@@ -1521,7 +1651,11 @@ btnOnlinePlay.addEventListener('click', () => {
 });
 btnCloseOnlinePlay.addEventListener('click', () => {
   stopFirestoreRoomsListener();
-  closeModal(onlinePlayModal);
+  if (activeRoomCode) {
+    leaveCurrentRoom();
+  } else {
+    closeModal(onlinePlayModal);
+  }
 });
 
 btnCardCreateRoom.addEventListener('click', () => {
@@ -1721,11 +1855,12 @@ function renderRealtimeRoomsList() {
     card.innerHTML = `
       <div class="room-card-info">
         <div class="room-card-header">
-          <span class="room-card-title">👑 ${r.hostNickname || 'ホスト'}さんの部屋</span>
+          <span class="room-card-title">🏠 ${r.name || (r.hostNickname ? r.hostNickname + 'さんの部屋' : '人狼部屋')}</span>
           <span class="room-code-chip">#${r.code}</span>
           <span class="room-status-badge ${statusBadgeClass}">${statusText}</span>
         </div>
         <div class="room-card-meta">
+          <span>👑 ホスト: ${r.hostNickname || 'ホスト'}</span>
           <span>👥 ${r.playerCount} / ${r.maxPlayers}人 (最低3人)</span>
           <span>⏱️ ${r.discussionTime || 60}秒</span>
           <span>🎭 ${r.roleMode === 'original' ? 'カスタム配役' : 'ノーマル'}</span>
@@ -1871,10 +2006,32 @@ roomCodeInput.addEventListener('input', () => {
   joinRoomErrorMsg.classList.remove('visible');
 });
 
+if (roomNameInput) {
+  roomNameInput.addEventListener('input', (e) => {
+    let val = e.target.value;
+    if (val.length > 8) {
+      e.target.value = val.slice(0, 8);
+      val = e.target.value;
+    }
+    if (roomNameCharCounter) roomNameCharCounter.textContent = `${val.length}/8`;
+    if (roomNameErrorMsg) roomNameErrorMsg.classList.remove('visible');
+  });
+}
+
 // Create Room Action
 btnConfirmCreateRoom.addEventListener('click', async () => {
   btnConfirmCreateRoom.disabled = true;
   try {
+    let roomName = (roomNameInput ? roomNameInput.value : '').trim();
+    if (!roomName) roomName = `${localNickname || 'ホスト'}の部屋`;
+    if (roomName.length > 8) roomName = roomName.slice(0, 8);
+    if (roomName.length < 2) {
+      if (roomNameErrorMsg) roomNameErrorMsg.classList.add('visible');
+      showToast('⚠️ 部屋の名前は2文字〜8文字で入力してください');
+      btnConfirmCreateRoom.disabled = false;
+      return;
+    }
+
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     showToast('部屋を作成中...');
 
@@ -1887,6 +2044,7 @@ btnConfirmCreateRoom.addEventListener('click', async () => {
     const finalRolesList = expandRolesList(finalConfig);
 
     const roomData = await createFirestoreRoom(code, localPlayerId, localNickname, {
+      name: roomName,
       maxPlayers: createRoomPlayerCount,
       discussionTime: createRoomDiscussionTime,
       roleMode: createRoomMode,
@@ -1900,6 +2058,7 @@ btnConfirmCreateRoom.addEventListener('click', async () => {
 
     sendWs('CREATE_ROOM', {
       code,
+      name: roomName,
       playerId: localPlayerId,
       nickname: localNickname,
       maxPlayers: createRoomPlayerCount,
@@ -1910,7 +2069,7 @@ btnConfirmCreateRoom.addEventListener('click', async () => {
       isVcOn: voiceManager.isVcEnabled
     });
 
-    showToast(`部屋 #${code} を作成しました！`);
+    showToast(`部屋 #${code}「${roomName}」を作成しました！`);
   } catch (err) {
     showToast('部屋作成エラー: ' + err.message);
   } finally {
@@ -1946,6 +2105,7 @@ async function leaveCurrentRoom(options = {}) {
   const code = activeRoomCode;
   if (!code) return;
 
+  const meWasHost = isHost;
   stopPresenceHeartbeat();
   if (lobbyUnsubscribe) {
     try { lobbyUnsubscribe(); } catch (e) {}
@@ -1953,12 +2113,22 @@ async function leaveCurrentRoom(options = {}) {
   }
 
   // 1. Send WebSocket leave notification
-  sendWs('LEAVE_ROOM', { code, playerId: localPlayerId });
+  sendWs('LEAVE_ROOM', { code, playerId: localPlayerId, isHost: meWasHost });
 
-  // 2. Beacon for instantaneous browser unload / back
+  // 2. Fetch keepalive and Beacon for instantaneous browser unload / back
+  const payloadStr = JSON.stringify({ playerId: localPlayerId, isHost: meWasHost });
+  try {
+    fetch(`/api/jinrou/rooms/${encodeURIComponent(code)}/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payloadStr,
+      keepalive: true
+    }).catch(() => {});
+  } catch (e) {}
+
   if (navigator.sendBeacon) {
     try {
-      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(code)}/leave`, JSON.stringify({ playerId: localPlayerId }));
+      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(code)}/leave`, payloadStr);
     } catch (e) {}
   }
 
@@ -1985,6 +2155,8 @@ async function leaveCurrentRoom(options = {}) {
     } catch (e) {}
   }
 
+  loadActiveRooms();
+
   if (options.fromBrowserBack) {
     showToast('🔙 ブラウザバックにより部屋から退出しました');
   } else {
@@ -2005,7 +2177,7 @@ window.addEventListener('popstate', async () => {
 window.addEventListener('pagehide', () => {
   if (activeRoomCode && navigator.sendBeacon) {
     try {
-      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/leave`, JSON.stringify({ playerId: localPlayerId }));
+      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/leave`, JSON.stringify({ playerId: localPlayerId, isHost }));
     } catch (e) {}
   }
 });
@@ -2013,7 +2185,7 @@ window.addEventListener('pagehide', () => {
 window.addEventListener('beforeunload', () => {
   if (activeRoomCode && navigator.sendBeacon) {
     try {
-      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/leave`, JSON.stringify({ playerId: localPlayerId }));
+      navigator.sendBeacon(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/leave`, JSON.stringify({ playerId: localPlayerId, isHost }));
     } catch (e) {}
   }
 });

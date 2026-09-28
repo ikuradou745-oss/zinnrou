@@ -144,6 +144,7 @@ export function normalizeRoomData(data, docId, collectionName = 'jinrou_rooms') 
   const code = String(rawCode).replace(/^[#＃\s]/g, '').trim();
 
   const hostNickname = data.hostNickname || data.hostName || data.host || data.owner || data.creator || 'ホスト';
+  const name = (data.name || data.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
   const hostId = data.hostId || data.ownerId || ('host_' + code);
 
   const rawStatus = (data.status || 'waiting').toString().toLowerCase();
@@ -240,6 +241,7 @@ export function normalizeRoomData(data, docId, collectionName = 'jinrou_rooms') 
   return {
     ...data,
     code,
+    name,
     docId: docId || code,
     collectionName,
     hostId,
@@ -310,6 +312,7 @@ export async function findFirestoreRoom(roomCode) {
 
 export async function createFirestoreRoom(roomCode, hostId, hostNickname, settings = {}) {
   const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const roomName = (settings.name || settings.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
   const maxPlayers = Number(settings.maxPlayers) || 5;
   const roleMode = settings.roleMode || 'normal';
   const rolesConfig = settings.rolesConfig || {};
@@ -334,6 +337,7 @@ export async function createFirestoreRoom(roomCode, hostId, hostNickname, settin
 
   const roomData = {
     code: cleanCode,
+    name: roomName,
     hostId,
     hostNickname,
     maxPlayers,
@@ -488,6 +492,7 @@ export async function fetchActiveFirestoreRooms() {
           if (!roomsMap.has(norm.code) || roomsMap.get(norm.code).playerCount < norm.playerCount) {
             roomsMap.set(norm.code, {
               code: norm.code,
+              name: norm.name || `${norm.hostNickname || 'ホスト'}の部屋`,
               docId: norm.docId,
               collectionName: norm.collectionName,
               hostNickname: norm.hostNickname || 'ホスト',
@@ -539,6 +544,7 @@ export function subscribeToActiveRooms(onUpdate, onError) {
           if (norm && norm.code && norm.status !== 'finished') {
             colMap.set(norm.code, {
               code: norm.code,
+              name: norm.name || `${norm.hostNickname || 'ホスト'}の部屋`,
               docId: norm.docId,
               collectionName: norm.collectionName,
               hostNickname: norm.hostNickname || 'ホスト',
@@ -658,12 +664,18 @@ export function subscribeToRoom(roomCode, onUpdate, onError) {
 export async function leaveFirestoreRoom(roomCode, playerId) {
   const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
   const room = getRoomLocally(cleanCode);
+  const isHostLeavingLobby = room && room.hostId === playerId && (room.status === 'waiting' || !room.status);
+
   if (room && room.players) {
     delete room.players[playerId];
-    if (Object.keys(room.players).length === 0) {
+    const realRemaining = Object.keys(room.players).filter(id => !id.startsWith('dummy_'));
+    if (realRemaining.length === 0 || isHostLeavingLobby) {
       localRoomsMemory.delete(cleanCode);
       if (typeof localStorage !== "undefined") {
         localStorage.removeItem(`jinrou_room_${cleanCode}`);
+      }
+      if (roomBroadcastChannel) {
+        try { roomBroadcastChannel.postMessage({ type: "ROOM_DELETED", roomCode: cleanCode }); } catch (e) {}
       }
     } else {
       if (room.hostId === playerId) {
@@ -678,12 +690,13 @@ export async function leaveFirestoreRoom(roomCode, playerId) {
     }
   }
 
-  // Call Express API
+  // Call Express API with keepalive
   try {
     fetch(`/api/jinrou/rooms/${cleanCode}/leave`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId })
+      body: JSON.stringify({ playerId, isHost: isHostLeavingLobby }),
+      keepalive: true
     }).catch(() => {});
   } catch (e) {}
 
@@ -698,7 +711,9 @@ export async function leaveFirestoreRoom(roomCode, playerId) {
         const players = { ...(data.players || {}) };
         delete players[playerId];
         const remainingIds = Object.keys(players);
-        if (remainingIds.length === 0) {
+        const realRemainingIds = remainingIds.filter(id => !id.startsWith('dummy_'));
+        const shouldDelete = (remainingIds.length === 0) || (realRemainingIds.length === 0) || (data.hostId === playerId && (data.status === 'waiting' || !data.status));
+        if (shouldDelete) {
           await deleteDoc(roomRef);
         } else {
           let hostId = data.hostId;
@@ -717,6 +732,7 @@ export async function leaveFirestoreRoom(roomCode, playerId) {
             hostId,
             players,
             members: updatedMembers,
+            playerCount: remainingIds.length,
             updatedAt: serverTimestamp()
           });
         }

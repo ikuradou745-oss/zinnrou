@@ -205,12 +205,12 @@
       left: 18px;
       width: 320px;
       max-width: calc(100vw - 36px);
-      background: rgba(255, 255, 255, 0.96);
-      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.98);
+      border: 1.5px solid var(--border-color);
       border-radius: 16px;
-      box-shadow: var(--shadow-lg);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
       backdrop-filter: blur(14px);
-      z-index: 100;
+      z-index: 2200 !important; /* Always visible above modals and game canvas */
       overflow: hidden;
       display: none;
       transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -1727,10 +1727,30 @@
         </div>
       </div>
 
-      <!-- View B: Create Room Settings (ユーザー要望: 配役ノーマル/カスタム切替、役職表示、話し合い時間10~90秒) -->
+      <!-- View B: Create Room Settings (ユーザー要望: 部屋名追加 2~8文字、配役ノーマル/カスタム切替、話し合い時間10~90秒) -->
       <div id="onlineCreateRoomView" style="display: none;">
         
-        <!-- 1. 参加定員人数 (3人〜12人) -->
+        <!-- 0. 部屋の名前 (ユーザー指定: 2~8文字。自由に決めれます。) -->
+        <div class="form-group">
+          <label class="form-label" for="roomNameInput">
+            🏠 部屋の名前 <span class="form-label-desc">（2文字〜8文字・自由に設定できます）</span>
+          </label>
+          <div class="input-wrapper">
+            <input 
+              type="text" 
+              id="roomNameInput" 
+              class="text-input" 
+              placeholder="例: 初心者歓迎、人狼の村" 
+              maxlength="8" 
+              value="人狼部屋" 
+              autocomplete="off"
+            />
+            <span class="char-counter" id="roomNameCharCounter">4/8</span>
+          </div>
+          <div class="input-error-msg" id="roomNameErrorMsg">部屋の名前は2文字〜8文字で入力してください</div>
+        </div>
+
+        <!-- 1. 参加定員人数 (2人〜12人) -->
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
             <label class="form-label" style="margin-bottom: 0;">👥 参加定員人数</label>
@@ -1740,13 +1760,13 @@
             type="range" 
             id="roomPlayerCountSlider" 
             class="range-slider" 
-            min="3" 
+            min="2" 
             max="12" 
             step="1" 
             value="5" 
           />
           <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-top: -4px;">
-            <span>最小 3人</span>
+            <span>最小 2人</span>
             <span>標準 5〜8人</span>
             <span>最大 12人</span>
           </div>
@@ -1822,7 +1842,10 @@
       <!-- View C: Room Waiting Lobby -->
       <div id="onlineLobbyView" style="display: none; text-align: center;">
         
-        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 2px;">4桁の部屋コード</div>
+        <div style="font-size: 0.95rem; font-weight: 900; color: var(--text-main); margin-bottom: 2px;">
+          🏠 部屋名: <span id="lobbyRoomNameText" style="color: var(--crimson);">人狼部屋</span>
+        </div>
+        <div style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 4px;">部屋参加コード</div>
         <div class="room-code-badge">
           <span id="lobbyRoomCodeText">#----</span>
           <button class="btn-copy-code" id="btnCopyRoomCode">コピー</button>
@@ -1838,8 +1861,11 @@
             <span id="lobbyMicIcon">🎙️</span>
             <span id="lobbyMicLabel">マイク: ON</span>
           </button>
+          <button type="button" class="btn-secondary" id="btnLobbyAddDummy" title="一人でもテストプレイできるように練習用Botを追加" style="padding: 5px 10px; font-size: 0.74rem; font-weight: 800; color: var(--emerald); border-color: rgba(5,150,105,0.35); background: var(--emerald-light); border-radius: 9999px;">
+            🤖 Bot追加 (+1人)
+          </button>
           <button type="button" class="btn-secondary" id="btnLobbyForceVc" title="VCが繋がらない時の強制再接続・端末設定" style="padding: 5px 10px; font-size: 0.74rem; font-weight: 800; color: var(--crimson); border-color: rgba(225,29,72,0.35); background: var(--crimson-light); border-radius: 9999px;">
-            ⚡ VC強制設定
+            ⚡ VC強制
           </button>
           <span class="speaking-indicator-ring" id="lobbySpeakingRing" title="発話状態"></span>
           <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: auto;">待機中通話中</span>
@@ -2036,9 +2062,10 @@
   <!-- 7. In-Game Screen (人狼ゲーム本編画面: 朝の話し合い・追放投票・夜の行動サイクル) -->
   <div id="gameView">
     <div class="game-top-bar">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-weight: 900; font-size: 1.1rem; color: var(--crimson);">🐺 人狼</span>
-        <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted);" id="gameDayCountText">1日目</span>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-weight: 900; font-size: 1.05rem; color: var(--crimson);">🐺 <span id="gameRoomNameText">人狼部屋</span></span>
+        <span style="font-size: 0.82rem; font-weight: 800; color: var(--sky);" id="gameRoomCodeText">#----</span>
+        <span style="font-size: 0.82rem; font-weight: 700; color: var(--text-muted);" id="gameDayCountText">1日目</span>
       </div>
 
       <div class="game-phase-badge day" id="gamePhaseBadge">

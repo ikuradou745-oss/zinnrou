@@ -47,6 +47,15 @@ function ensureGameBundle() {
 ensureGameBundle();
 
 app.use(express.json());
+app.use(express.text({ type: ['text/plain', 'text/*'] }));
+app.use((req, res, next) => {
+  if (typeof req.body === 'string') {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch (e) {}
+  }
+  next();
+});
 
 // Enable CORS
 app.use((req, res, next) => {
@@ -105,6 +114,7 @@ async function getActiveRoomsSummary() {
   for (const room of rooms.values()) {
     roomsMap.set(room.code, {
       code: room.code,
+      name: room.name || `${room.hostNickname || 'ホスト'}の部屋`,
       hostNickname: room.hostNickname || 'ホスト',
       playerCount: room.players.size,
       maxPlayers: room.maxPlayers || 5,
@@ -138,7 +148,10 @@ async function getActiveRoomsSummary() {
             count = data.playerCount;
           }
 
+          if (count === 0) return;
+
           const hostNickname = data.hostNickname || data.hostName || data.host || data.owner || data.creator || 'ホスト';
+          const roomName = (data.name || data.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
           const maxPlayers = Number(data.maxPlayers || data.max || data.capacity) || 5;
           const roleMode = (data.roleMode || 'normal') === 'original' ? 'original' : 'normal';
           const discussionTime = Number(data.discussionTime || data.time || data.discussion) || 60;
@@ -147,6 +160,7 @@ async function getActiveRoomsSummary() {
           if (!roomsMap.has(code) || roomsMap.get(code).playerCount < count) {
             roomsMap.set(code, {
               code,
+              name: roomName,
               hostNickname,
               playerCount: count,
               maxPlayers,
@@ -204,6 +218,7 @@ function getRoomSnapshot(room) {
 
   return {
     code: room.code,
+    name: room.name || `${room.hostNickname || 'ホスト'}の部屋`,
     hostId: room.hostId,
     hostNickname: room.hostNickname || 'ホスト',
     status: room.status || 'waiting',
@@ -253,14 +268,16 @@ function sendToPlayer(roomCode, playerId, message) {
   }
 }
 
-// Role distribution helper (Guarantees at least 3 players and 1 Werewolf)
+// Role distribution helper (Guarantees at least 2 players and 1 Werewolf)
 function assignRoles(playerIds, configuredRolesList) {
   const shuffledIds = [...playerIds].sort(() => Math.random() - 0.5);
   let pool = [...(configuredRolesList || [])];
 
   if (pool.length < shuffledIds.length) {
     const count = shuffledIds.length;
-    if (count === 3) {
+    if (count <= 2) {
+      pool = ['werewolf', 'seer'];
+    } else if (count === 3) {
       pool = ['werewolf', 'seer', 'villager'];
     } else if (count === 4) {
       pool = ['werewolf', 'seer', 'hunter_guard', 'villager'];
@@ -311,11 +328,13 @@ app.post('/api/jinrou/rooms', (req, res) => {
   const code = (data.code || generateRoomCode()).toString().replace(/^[#＃]/, '').trim();
   const hostId = data.hostId || 'host_' + Date.now();
   const hostNickname = data.hostNickname || 'ホスト';
+  const roomName = (data.name || data.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
 
   let room = rooms.get(code);
   if (!room) {
     room = {
       code,
+      name: roomName,
       hostId,
       hostNickname,
       status: 'waiting',
@@ -333,6 +352,7 @@ app.post('/api/jinrou/rooms', (req, res) => {
     };
     rooms.set(code, room);
   } else {
+    room.name = roomName;
     room.hostId = hostId;
     room.hostNickname = hostNickname;
     if (data.maxPlayers) room.maxPlayers = Number(data.maxPlayers);
@@ -402,12 +422,14 @@ async function ensureRoomInMemory(code, roomData = null) {
 
   if (data) {
     const hostNickname = data.hostNickname || data.hostName || data.host || data.owner || data.creator || 'ホスト';
+    const roomName = (data.name || data.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
     const hostId = data.hostId || data.ownerId || ('host_' + cleanCode);
     const rawStatus = (data.status || 'waiting').toString().toLowerCase();
     const status = (rawStatus === 'in_game' || rawStatus === 'playing') ? 'in_game' : (rawStatus === 'finished' ? 'finished' : 'waiting');
 
     room = {
       code: cleanCode,
+      name: roomName,
       hostId,
       hostNickname,
       status,
@@ -506,11 +528,81 @@ app.post('/api/jinrou/rooms/:code/join', async (req, res) => {
 
 app.post('/api/jinrou/rooms/:code/leave', async (req, res) => {
   const cleanCode = (req.params.code || '').toString().replace(/^[#＃\s]/g, '').trim();
-  const { playerId } = req.body || {};
-  if (cleanCode && playerId) {
-    await handleLeave(null, cleanCode, playerId, true);
+  const playerId = (req.body && req.body.playerId) || req.query.playerId;
+  const isHost = (req.body && req.body.isHost) || req.query.isHost === 'true';
+  if (cleanCode) {
+    await handleLeave(null, cleanCode, playerId, true, isHost);
   }
   res.json({ success: true });
+});
+
+app.get('/api/jinrou/rooms/:code/leave', async (req, res) => {
+  const cleanCode = (req.params.code || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const playerId = req.query.playerId;
+  const isHost = req.query.isHost === 'true';
+  if (cleanCode) {
+    await handleLeave(null, cleanCode, playerId, true, isHost);
+  }
+  res.json({ success: true });
+});
+
+// REST Fallback for Chat (Dual-path delivery guarantee)
+app.post('/api/jinrou/rooms/:code/chat', async (req, res) => {
+  const cleanCode = (req.params.code || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const room = await ensureRoomInMemory(cleanCode);
+  if (!room) return res.status(404).json({ error: '部屋が見つかりません' });
+  const { id, senderId, senderName, text } = req.body || {};
+  let rawText = String(text || '').trim();
+  if (!rawText) return res.status(400).json({ error: 'メッセージが空です' });
+  if (rawText.length > 20) rawText = rawText.slice(0, 20);
+
+  const chatMsg = {
+    id: id || ('msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)),
+    senderId: senderId || 'anon',
+    senderName: senderName || (room.players.get(senderId)?.nickname) || 'プレイヤー',
+    text: rawText,
+    timestamp: Date.now()
+  };
+
+  room.chatHistory = room.chatHistory || [];
+  room.chatHistory.push(chatMsg);
+  if (room.chatHistory.length > 50) room.chatHistory.shift();
+
+  broadcastToRoom(cleanCode, {
+    type: 'CHAT_MESSAGE',
+    payload: chatMsg
+  });
+
+  res.json({ success: true, chatMsg });
+});
+
+app.post('/api/jinrou/rooms/:code/add-dummy', async (req, res) => {
+  const cleanCode = (req.params.code || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const room = await ensureRoomInMemory(cleanCode);
+  if (!room || room.status !== 'waiting') {
+    return res.status(400).json({ error: '部屋が見つからないかゲーム中です' });
+  }
+  const dummyNames = ['タロウ', 'ハナコ', 'ケンジ', 'ユキ', 'シンジ', 'サクラ', 'レン', 'ミホ'];
+  const count = room.players.size;
+  if (count >= room.maxPlayers) {
+    return res.status(400).json({ error: '満員です' });
+  }
+  const dummyId = 'dummy_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5);
+  const dummyName = dummyNames[(count - 1) % dummyNames.length] + ' (Bot)';
+  room.players.set(dummyId, {
+    id: dummyId,
+    nickname: dummyName,
+    isHost: false,
+    isAlive: true,
+    isVcOn: false,
+    isMuted: true,
+    isSpeaking: false,
+    joinedAt: Date.now()
+  });
+  const snap = getRoomSnapshot(room);
+  broadcastToRoom(cleanCode, { type: 'ROOM_UPDATE', payload: snap });
+  broadcastActiveRoomsList();
+  res.json(snap);
 });
 
 app.get('*', (req, res) => {
@@ -541,6 +633,8 @@ wss.on('connection', (ws) => {
 
         case 'CREATE_ROOM': {
           const code = (payload.code || generateRoomCode()).toString().replace(/^[#＃]/, '').trim();
+          const hostNickname = payload.nickname || 'ホスト';
+          const roomName = (payload.name || payload.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
           clientRoomCode = code;
           clientPlayerId = payload.playerId;
 
@@ -548,8 +642,9 @@ wss.on('connection', (ws) => {
           if (!room) {
             room = {
               code,
+              name: roomName,
               hostId: payload.playerId,
-              hostNickname: payload.nickname || 'ホスト',
+              hostNickname,
               status: 'waiting',
               maxPlayers: Number(payload.maxPlayers) || 5,
               discussionTime: Number(payload.discussionTime) || 60,
@@ -565,8 +660,9 @@ wss.on('connection', (ws) => {
             };
             rooms.set(code, room);
           } else {
+            room.name = roomName;
             room.hostId = payload.playerId;
-            room.hostNickname = payload.nickname || room.hostNickname || 'ホスト';
+            room.hostNickname = hostNickname;
             if (payload.maxPlayers) room.maxPlayers = Number(payload.maxPlayers);
             if (payload.discussionTime) room.discussionTime = Number(payload.discussionTime);
             if (payload.roleMode) room.roleMode = payload.roleMode;
@@ -577,7 +673,7 @@ wss.on('connection', (ws) => {
 
           room.players.set(payload.playerId, {
             id: payload.playerId,
-            nickname: payload.nickname || 'ホスト',
+            nickname: hostNickname,
             isHost: true,
             isAlive: true,
             isVcOn: payload.isVcOn !== false,
@@ -592,6 +688,31 @@ wss.on('connection', (ws) => {
             type: 'ROOM_CREATED',
             payload: snap
           }));
+          broadcastToRoom(code, { type: 'ROOM_UPDATE', payload: snap });
+          broadcastActiveRoomsList();
+          break;
+        }
+
+        case 'ADD_DUMMY_PLAYER': {
+          const code = (payload.code || payload.roomCode || clientRoomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+          const room = rooms.get(code);
+          if (!room || room.status !== 'waiting') break;
+          const dummyNames = ['タロウ', 'ハナコ', 'ケンジ', 'ユキ', 'シンジ', 'サクラ', 'レン', 'ミホ'];
+          const count = room.players.size;
+          if (count >= room.maxPlayers) break;
+          const dummyId = 'dummy_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5);
+          const dummyName = dummyNames[(count - 1) % dummyNames.length] + ' (Bot)';
+          room.players.set(dummyId, {
+            id: dummyId,
+            nickname: dummyName,
+            isHost: false,
+            isAlive: true,
+            isVcOn: false,
+            isMuted: true,
+            isSpeaking: false,
+            joinedAt: Date.now()
+          });
+          const snap = getRoomSnapshot(room);
           broadcastToRoom(code, { type: 'ROOM_UPDATE', payload: snap });
           broadcastActiveRoomsList();
           break;
@@ -813,13 +934,13 @@ wss.on('connection', (ws) => {
             }));
           }
 
-          // Strict Requirement: Minimum 3 players required to start!
+          // Minimum 2 players required to start (3+ players recommended)
           const currentCount = room.players.size;
-          if (currentCount < 3) {
+          if (currentCount < 2) {
             return ws.send(JSON.stringify({
               type: 'ERROR',
               payload: {
-                message: `ゲームを開始するには最低3人のプレイヤーが必要です（現在: ${currentCount}/3人）`
+                message: `ゲームを開始するには最低2人のプレイヤーが必要です（現在: ${currentCount}人）。「Bot追加」ボタンで練習用プレイヤーを追加できます。`
               }
             }));
           }
@@ -887,9 +1008,16 @@ wss.on('connection', (ws) => {
 
         // --- Top-Left Chat Messages (Max 20 chars, format: [User]: [Content]) ---
         case 'CHAT_MESSAGE': {
-          if (!clientRoomCode) return;
-          const room = rooms.get(clientRoomCode);
+          const code = (payload.roomCode || clientRoomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+          if (!code) return;
+          const room = rooms.get(code) || await ensureRoomInMemory(code);
           if (!room) return;
+
+          clientRoomCode = code;
+          if (payload.senderId) {
+            clientPlayerId = payload.senderId;
+            room.sockets.set(clientPlayerId, ws);
+          }
 
           let rawText = String(payload.text || '').trim();
           if (!rawText) return;
@@ -900,7 +1028,7 @@ wss.on('connection', (ws) => {
           const senderName = payload.senderName || (room.players.get(clientPlayerId)?.nickname) || 'プレイヤー';
           const chatMsg = {
             id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-            senderId: clientPlayerId,
+            senderId: payload.senderId || clientPlayerId,
             senderName,
             text: rawText,
             timestamp: Date.now()
@@ -910,7 +1038,7 @@ wss.on('connection', (ws) => {
           room.chatHistory.push(chatMsg);
           if (room.chatHistory.length > 50) room.chatHistory.shift();
 
-          broadcastToRoom(clientRoomCode, {
+          broadcastToRoom(code, {
             type: 'CHAT_MESSAGE',
             payload: chatMsg
           });
@@ -987,7 +1115,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-async function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
+async function handleLeave(ws, roomCode, playerId, isExplicitLeave = false, forceHost = false) {
   // If this socket was waiting on a pending join request in any room, cancel it
   if (ws && ws._pendingRoomCode && ws._pendingRequesterId) {
     const pRoom = rooms.get(ws._pendingRoomCode);
@@ -998,8 +1126,21 @@ async function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
   }
 
   const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
-  if (!cleanCode || !rooms.has(cleanCode)) return;
+  if (!cleanCode) return;
+
   const room = rooms.get(cleanCode);
+  if (!room) {
+    // If room is not in memory, delete from Firestore if host left
+    if (forceHost && firestoreDb) {
+      for (const col of ['jinrou_rooms', 'rooms']) {
+        try {
+          await deleteDoc(doc(firestoreDb, col, cleanCode));
+        } catch (e) {}
+      }
+    }
+    broadcastActiveRoomsList();
+    return;
+  }
 
   if (playerId) {
     room.sockets.delete(playerId);
@@ -1010,11 +1151,23 @@ async function handleLeave(ws, roomCode, playerId, isExplicitLeave = false) {
     room.pendingRequests.delete(playerId);
   }
 
-  if (room.players.size === 0) {
+  // If no real players remain OR if the host leaves while the room is in the lobby waiting:
+  const realPlayersLeft = Array.from(room.players.keys()).filter(id => !id.startsWith('dummy_')).length;
+  const isHostLeavingLobby = (room.hostId === playerId || forceHost) && room.status === 'waiting';
+  const shouldDeleteRoom = (room.players.size === 0) || (realPlayersLeft === 0) || isHostLeavingLobby;
+
+  if (shouldDeleteRoom) {
     if (room.timerInterval) clearInterval(room.timerInterval);
     if (room._cleanupTimer) clearTimeout(room._cleanupTimer);
+
+    // Notify any remaining sockets that room was dissolved
+    broadcastToRoom(cleanCode, {
+      type: 'ROOM_CLOSED',
+      payload: { message: 'ホストが退出したため部屋は解散されました。' }
+    });
+
     rooms.delete(cleanCode);
-    console.log(`[jinrou-online] Room #${cleanCode} closed (empty).`);
+    console.log(`[jinrou-online] Room #${cleanCode} deleted and closed.`);
     broadcastActiveRoomsList();
 
     if (firestoreDb) {
@@ -1113,8 +1266,9 @@ function hasAliveRole(room, roleName) {
 }
 
 // Helper: Determine next night sub-phase (Skip roles not present or dead)
+// ユーザー指定順序: 狩人が動いた後に人狼、その後に占い師や霊媒師やメディ
 function getNextNightSubPhase(room, currentPhase) {
-  const order = ['night_guard', 'night_werewolf', 'night_seer', 'night_medium', 'night_archer', 'night_medic'];
+  const order = ['night_guard', 'night_werewolf', 'night_seer', 'night_medium', 'night_medic', 'night_archer'];
   const startIndex = currentPhase ? order.indexOf(currentPhase) + 1 : 0;
 
   for (let i = startIndex; i < order.length; i++) {
@@ -1123,16 +1277,76 @@ function getNextNightSubPhase(room, currentPhase) {
     if (phaseKey === 'night_werewolf' && hasAliveRole(room, 'werewolf')) return phaseKey;
     if (phaseKey === 'night_seer' && hasAliveRole(room, 'seer')) return phaseKey;
     if (phaseKey === 'night_medium' && hasAliveRole(room, 'medium')) return phaseKey;
+    if (phaseKey === 'night_medic') {
+      const medic = Array.from(room.players.values()).find(p => p.isAlive && p.role === 'medic' && !p.usedMedic);
+      if (medic) return phaseKey;
+    }
     if (phaseKey === 'night_archer') {
       const archer = Array.from(room.players.values()).find(p => p.isAlive && p.role === 'archer' && !p.usedArcher);
       if (archer) return phaseKey;
     }
-    if (phaseKey === 'night_medic') {
-      const medic = Array.from(room.players.values()).find(p => p.isAlive && p.role === 'medic' && !p.usedMedic);
-      if (medic && room.game.dayCount >= 2) return phaseKey;
-    }
   }
   return 'morning_result';
+}
+
+function simulateBotActions(room) {
+  if (!room || !room.game) return;
+  const g = room.game;
+  const alivePlayers = Array.from(room.players.values()).filter(p => p.isAlive);
+  const bots = alivePlayers.filter(p => p.id.startsWith('dummy_'));
+  if (bots.length === 0) return;
+
+  setTimeout(() => {
+    if (!room.game || room.game.phase !== g.phase) return;
+
+    if (g.phase === 'morning_voting') {
+      bots.forEach(bot => {
+        if (!g.votes[bot.id]) {
+          const others = alivePlayers.filter(p => p.id !== bot.id);
+          if (others.length > 0) {
+            const pick = others[Math.floor(Math.random() * others.length)];
+            g.votes[bot.id] = pick.id;
+          }
+        }
+      });
+      broadcastToRoom(room.code, {
+        type: 'VOTE_RECORDED',
+        payload: { totalVotes: Object.keys(g.votes).length }
+      });
+      if (Object.keys(g.votes).length >= alivePlayers.length) {
+        advanceGamePhase(room);
+      }
+    } else if (g.phase === 'night_guard') {
+      const botGuard = bots.find(b => b.role === 'hunter_guard');
+      if (botGuard && !g.nightActions.hunter_guard) {
+        const others = alivePlayers.filter(p => p.id !== botGuard.id);
+        const pick = others[Math.floor(Math.random() * others.length)] || botGuard;
+        g.nightActions.hunter_guard = pick.id;
+        advanceGamePhase(room);
+      }
+    } else if (g.phase === 'night_werewolf') {
+      const botWolf = bots.find(b => b.role === 'werewolf');
+      if (botWolf && !g.nightActions.werewolf) {
+        const targets = alivePlayers.filter(p => p.role !== 'werewolf');
+        if (targets.length > 0) {
+          const pick = targets[Math.floor(Math.random() * targets.length)];
+          g.nightActions.werewolf = pick.id;
+        }
+        advanceGamePhase(room);
+      }
+    } else if (g.phase === 'night_seer') {
+      const botSeer = bots.find(b => b.role === 'seer');
+      if (botSeer) {
+        advanceGamePhase(room);
+      }
+    } else if (g.phase === 'night_medic') {
+      const botMedic = bots.find(b => b.role === 'medic' && !b.usedMedic);
+      if (botMedic) {
+        botMedic.usedMedic = true;
+        advanceGamePhase(room);
+      }
+    }
+  }, 1800);
 }
 
 // State Machine transitions
@@ -1145,16 +1359,17 @@ function advanceGamePhase(room) {
       // Role reveal ends -> Morning Discussion begins!
       g.phase = 'morning_discussion';
       g.phaseTitle = `☀️ ${g.dayCount}日目 朝の話し合い`;
-      g.timerSec = room.discussionTime || 60; // 10s to 90s, default 60s
+      g.timerSec = room.discussionTime || 60; // ユーザー設定時間 (10s〜90s)
       break;
     }
 
     case 'morning_discussion': {
-      // Discussion ends -> Exile Voting begins!
+      // ユーザー指定: 朝（部屋を作る時指定した時間話し合いをしたあと、20秒間誰を追放するか選ぶ）
       g.phase = 'morning_voting';
-      g.phaseTitle = '🗳️ 追放投票タイム（怪しい人を選んでください）';
-      g.timerSec = 25;
+      g.phaseTitle = '🗳️ 追放投票タイム（誰を追放するか選んでください）';
+      g.timerSec = 20; // 厳密に20秒間
       g.votes = {};
+      simulateBotActions(room);
       break;
     }
 
@@ -1195,9 +1410,7 @@ function advanceGamePhase(room) {
       }
 
       // Check Victory Condition immediately after exile!
-      // Requirement:
-      // 1. "人狼を追放できたらその場で村人チームの勝ち"
-      // 2. "市民チームが2人以下しかいなくなったら人狼チームの勝ち"
+      // ユーザー指定:（この時に市民チームが二人以下だったら人狼の勝ち）
       const winResult = checkWinConditions(room);
       if (winResult) {
         g.phase = 'game_over';
@@ -1333,15 +1546,16 @@ function setNightSubPhase(room, phaseKey) {
         }
       }
       break;
-    case 'night_archer':
-      g.phaseTitle = '🏹 アーチャーのターン（狙撃するか選択）';
-      g.timerSec = 15;
-      break;
     case 'night_medic':
       g.phaseTitle = '💉 メディのターン（復活させる味方を選択）';
       g.timerSec = 15;
       break;
+    case 'night_archer':
+      g.phaseTitle = '🏹 アーチャーのターン（狙撃するか選択）';
+      g.timerSec = 15;
+      break;
   }
+  simulateBotActions(room);
 }
 
 // Night Actions Resolution
@@ -1420,12 +1634,22 @@ function checkWinConditions(room) {
     };
   }
 
-  // Condition 2: Citizen team <= 2 members left
-  if (aliveCitizens.length <= 2) {
-    return {
-      winner: 'werewolf',
-      title: '🐺 市民チームが2人以下になりました！人狼チームの完全勝利！'
-    };
+  // Condition 2: Citizen team <= 2 members left (ユーザー指定: この時に市民チームが二人以下だったら人狼の勝ち)
+  if (room.players.size >= 4) {
+    if (aliveCitizens.length <= 2) {
+      return {
+        winner: 'werewolf',
+        title: '🐺 市民チームが2人以下になりました！人狼チームの完全勝利！'
+      };
+    }
+  } else {
+    // 2-3 player test games
+    if (aliveCitizens.length <= 1 || aliveCitizens.length <= aliveWolves.length) {
+      return {
+        winner: 'werewolf',
+        title: '🐺 市民チームが壊滅しました！人狼チームの完全勝利！'
+      };
+    }
   }
 
   return null;
