@@ -106,7 +106,7 @@ export function getRoomLocally(code) {
 }
 
 // User Profile Helpers
-export async function savePlayerProfile(playerId, nickname, vcVolume = 100, coins = 0, unlockedRoles = []) {
+export async function savePlayerProfile(playerId, nickname, vcVolume = 100, coins = 0, unlockedRoles = [], avatarIcon = '') {
   if (!playerId || !nickname) return;
   try {
     const userRef = doc(db, "players", playerId);
@@ -115,6 +115,7 @@ export async function savePlayerProfile(playerId, nickname, vcVolume = 100, coin
       vcVolume: Number(vcVolume) || 100,
       coins: typeof coins === 'number' ? coins : 0,
       unlockedRoles: Array.isArray(unlockedRoles) ? unlockedRoles : [],
+      avatarIcon: avatarIcon || '',
       updatedAt: serverTimestamp()
     }, { merge: true });
   } catch (err) {
@@ -197,6 +198,7 @@ export function normalizeRoomData(data, docId, collectionName = 'jinrou_rooms') 
           players[pId] = {
             id: pId,
             nickname: p.nickname || p.name || 'プレイヤー',
+            avatarIcon: p.avatarIcon || '',
             isHost: p.isHost ?? (pId === hostId),
             isLeader: p.isLeader ?? (pId === hostId),
             role: p.role || null,
@@ -323,6 +325,7 @@ export async function createFirestoreRoom(roomCode, hostId, hostNickname, settin
   const hostPlayer = {
     id: hostId,
     nickname: hostNickname,
+    avatarIcon: settings.avatarIcon || '',
     isHost: true,
     isLeader: true,
     role: null,
@@ -390,7 +393,7 @@ export async function createFirestoreRoom(roomCode, hostId, hostNickname, settin
   return roomData;
 }
 
-export async function joinFirestoreRoom(roomCode, playerId, playerNickname, isVcOn = true) {
+export async function joinFirestoreRoom(roomCode, playerId, playerNickname, isVcOn = true, avatarIcon = '') {
   const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
   const roomData = await findFirestoreRoom(cleanCode);
 
@@ -417,6 +420,7 @@ export async function joinFirestoreRoom(roomCode, playerId, playerNickname, isVc
     [playerId]: {
       id: playerId,
       nickname: playerNickname,
+      avatarIcon: avatarIcon || currentPlayers[playerId]?.avatarIcon || '',
       isHost,
       isLeader: isHost,
       role: null,

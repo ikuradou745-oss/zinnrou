@@ -26,6 +26,40 @@ if (!localPlayerId) {
 localStorage.setItem('jinrou_player_id', localPlayerId);
 
 let localNickname = sessionStorage.getItem('jinrou_nickname') || localStorage.getItem('jinrou_nickname') || '';
+let localAvatarIcon = sessionStorage.getItem('jinrou_avatar_icon') || localStorage.getItem('jinrou_avatar_icon') || '';
+
+export function generateDefaultAvatar(name) {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    const colors = ['#e11d48', '#2563eb', '#059669', '#d97706', '#7c3aed', '#0284c7'];
+    let hash = 0;
+    const str = (name || '人').trim();
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    const color = colors[Math.abs(hash) % colors.length];
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(32, 32, 31, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(str.charAt(0) || '人', 32, 34);
+    return canvas.toDataURL('image/png');
+  } catch (e) {
+    return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="%232563eb"/><text x="20" y="26" font-size="18" text-anchor="middle" fill="white" font-weight="bold">人</text></svg>';
+  }
+}
+
+if (!localAvatarIcon && localNickname) {
+  localAvatarIcon = generateDefaultAvatar(localNickname);
+}
 let vcVolume = parseInt(localStorage.getItem('jinrou_vc_volume'), 10);
 if (isNaN(vcVolume) || vcVolume < 50 || vcVolume > 500) {
   vcVolume = 100;
@@ -242,6 +276,24 @@ const btnSettingsVcOn = document.getElementById('btnSettingsVcOn');
 const btnSettingsVcOff = document.getElementById('btnSettingsVcOff');
 const btnSettingsMicOn = document.getElementById('btnSettingsMicOn');
 const btnSettingsMicOff = document.getElementById('btnSettingsMicOff');
+
+// Avatar & Drawing Canvas Elements
+const topAvatarImg = document.getElementById('topAvatarImg');
+const settingsAvatarPreview = document.getElementById('settingsAvatarPreview');
+const settingsAvatarDisplayLabel = document.getElementById('settingsAvatarDisplayLabel');
+const avatarCanvas = document.getElementById('avatarCanvas');
+const btnToolPencil = document.getElementById('btnToolPencil');
+const btnToolLine = document.getElementById('btnToolLine');
+const btnToolCircle = document.getElementById('btnToolCircle');
+const btnToolFill = document.getElementById('btnToolFill');
+const btnToolEraser = document.getElementById('btnToolEraser');
+const avatarColorPicker = document.getElementById('avatarColorPicker');
+const canvasColorPalette = document.getElementById('canvasColorPalette');
+const canvasSizeGroup = document.getElementById('canvasSizeGroup');
+const btnAvatarUndo = document.getElementById('btnAvatarUndo');
+const btnAvatarClear = document.getElementById('btnAvatarClear');
+const btnAvatarSampleWolf = document.getElementById('btnAvatarSampleWolf');
+const btnSaveAvatar = document.getElementById('btnSaveAvatar');
 
 // Main Menu Actions
 const btnOnlinePlay = document.getElementById('btnOnlinePlay');

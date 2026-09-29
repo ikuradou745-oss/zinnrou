@@ -961,6 +961,208 @@
       background: var(--crimson-hover);
     }
 
+    /* --- Profile Custom Icon Canvas & Avatar Styles --- */
+    .chip-avatar-img {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1.5px solid var(--border-color);
+      flex-shrink: 0;
+      background: #ffffff;
+    }
+    .roster-avatar-img {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid var(--border-color);
+      flex-shrink: 0;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    }
+    .game-player-avatar-img {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2.5px solid var(--border-color);
+      background: #ffffff;
+      margin-bottom: 4px;
+      box-shadow: var(--shadow-sm);
+    }
+    .chat-avatar-img {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid var(--border-color);
+      flex-shrink: 0;
+      background: #ffffff;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    .avatar-live-preview-wrap {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      overflow: hidden;
+      border: 2.5px solid var(--border-color);
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: var(--shadow-sm);
+    }
+    .avatar-live-preview-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .avatar-canvas-layout {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .canvas-draw-container {
+      border: 2px solid var(--border-strong);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #ffffff;
+      box-shadow: var(--shadow-sm);
+      touch-action: none;
+      cursor: crosshair;
+      flex-shrink: 0;
+    }
+    .avatar-drawing-canvas {
+      display: block;
+      width: 170px;
+      height: 170px;
+      image-rendering: pixelated;
+      background: #ffffff;
+    }
+    .canvas-tools-panel {
+      flex: 1;
+      min-width: 160px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tools-btn-group {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+    }
+    .btn-canvas-tool {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 2px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      border: 1.5px solid var(--border-color);
+      border-radius: 8px;
+      background: #ffffff;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      color: var(--text-main);
+    }
+    .btn-canvas-tool:hover {
+      background: var(--bg-card-subtle);
+    }
+    .btn-canvas-tool.active {
+      border-color: var(--crimson);
+      background: var(--crimson-light);
+      color: var(--crimson);
+    }
+    .size-btn-group {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+    .btn-size-dot {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      border: 1.5px solid var(--border-color);
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-size-dot span {
+      border-radius: 50%;
+      background: #0f172a;
+      display: block;
+    }
+    .btn-size-dot.active {
+      border-color: var(--crimson);
+      background: var(--crimson-light);
+    }
+    .color-palette-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 5px;
+    }
+    .color-swatch {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      border: 1.5px solid rgba(0, 0, 0, 0.15);
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .color-swatch:hover {
+      transform: scale(1.12);
+    }
+    .color-swatch.active {
+      transform: scale(1.18);
+      border-color: #0f172a;
+      box-shadow: 0 0 0 2px #0284c7;
+    }
+    .custom-color-picker-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.74rem;
+      font-weight: 800;
+      color: var(--sky);
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: var(--sky-light);
+      border: 1px solid rgba(2, 132, 199, 0.3);
+    }
+    .native-color-input {
+      width: 0;
+      height: 0;
+      opacity: 0;
+      position: absolute;
+      pointer-events: none;
+    }
+    .btn-canvas-action {
+      flex: 1;
+      padding: 6px 8px;
+      font-size: 0.74rem;
+      font-weight: 800;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: #ffffff;
+      color: var(--text-sub);
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+    .btn-canvas-action:hover {
+      background: var(--bg-card-subtle);
+      color: var(--text-main);
+    }
+
     /* In-Game View Container */
     #gameView {
       position: absolute;
@@ -1532,8 +1734,8 @@
           <span class="coin-unit">C</span>
         </div>
 
-        <div class="nickname-chip" id="topNicknameChip" title="あなたのニックネーム">
-          <span class="user-icon">👤</span>
+        <div class="nickname-chip" id="topNicknameChip" title="あなたのプロフィール（アイコン・ニックネーム）">
+          <img id="topAvatarImg" class="chip-avatar-img" alt="アイコン" src="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><circle cx=%2220%22 cy=%2220%22 r=%2220%22 fill=%22%232563eb%22/><text x=%2220%22 y=%2226%22 font-size=%2218%22 text-anchor=%22middle%22 fill=%22white%22 font-weight=%22bold%22>人</text></svg>" />
           <span class="nick-text" id="topNicknameText">ゲスト</span>
         </div>
 
@@ -1731,6 +1933,111 @@
         </div>
         <button class="btn-secondary" id="btnSaveNickname" style="width: 100%; padding: 8px 14px; font-size: 0.88rem; margin-top: 6px;">
           ニックネームを変更
+        </button>
+      </div>
+
+      <!-- Profile Custom Icon Section (ユーザー指定: プロフィールにアイコンを追加、書くことができる、直線、塗りつぶし、丸、色自由選択、アイコン（名前）表示) -->
+      <div class="form-group" style="background: #f8fafc; border: 1.5px solid var(--border-color); border-radius: 16px; padding: 14px 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div>
+            <label class="form-label" style="margin-bottom: 2px;">
+              🎨 プロフィールアイコン作成
+            </label>
+            <div style="font-size: 0.74rem; color: var(--text-muted);">
+              自由に描いて自分だけのアイコンを作成・保存できます
+            </div>
+          </div>
+          <!-- Live Round Preview: アイコン（名前） -->
+          <div style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+            <div class="avatar-live-preview-wrap">
+              <img id="settingsAvatarPreview" class="avatar-live-preview-img" alt="アバタープレビュー" src="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><circle cx=%2220%22 cy=%2220%22 r=%2220%22 fill=%22%232563eb%22/><text x=%2220%22 y=%2226%22 font-size=%2218%22 text-anchor=%22middle%22 fill=%22white%22 font-weight=%22bold%22>人</text></svg>" />
+            </div>
+            <span id="settingsAvatarDisplayLabel" style="font-size: 0.7rem; font-weight: 800; color: var(--text-main); margin-top: 2px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              アイコン(自分)
+            </span>
+          </div>
+        </div>
+
+        <!-- Canvas and Tools Layout -->
+        <div class="avatar-canvas-layout">
+          <!-- Canvas drawing area -->
+          <div class="canvas-draw-container">
+            <canvas id="avatarCanvas" width="170" height="170" class="avatar-drawing-canvas"></canvas>
+          </div>
+
+          <!-- Tools and Settings -->
+          <div class="canvas-tools-panel">
+            <!-- Tool buttons: ペン, 直線, 丸, 塗りつぶし, 消しゴム -->
+            <div class="tools-btn-group">
+              <button type="button" class="btn-canvas-tool active" id="btnToolPencil" data-tool="pencil" title="ペン (自由線)">
+                <span>✏️</span><span style="font-size: 0.65rem;">ペン</span>
+              </button>
+              <button type="button" class="btn-canvas-tool" id="btnToolLine" data-tool="line" title="直線 (ドラッグして直線を引く)">
+                <span>📏</span><span style="font-size: 0.65rem;">直線</span>
+              </button>
+              <button type="button" class="btn-canvas-tool" id="btnToolCircle" data-tool="circle" title="丸 (ドラッグして丸を描く)">
+                <span>⭕</span><span style="font-size: 0.65rem;">丸</span>
+              </button>
+              <button type="button" class="btn-canvas-tool" id="btnToolFill" data-tool="fill" title="塗りつぶし (タップした領域を塗りつぶす)">
+                <span>🪣</span><span style="font-size: 0.65rem;">塗潰し</span>
+              </button>
+              <button type="button" class="btn-canvas-tool" id="btnToolEraser" data-tool="eraser" title="消しゴム">
+                <span>🧹</span><span style="font-size: 0.65rem;">消しゴム</span>
+              </button>
+            </div>
+
+            <!-- Stroke Size Dots -->
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
+              <span style="font-size: 0.72rem; font-weight: 800; color: var(--text-sub);">太さ:</span>
+              <div class="size-btn-group" id="canvasSizeGroup">
+                <button type="button" class="btn-size-dot" data-size="2" title="細い (2px)"><span style="width: 4px; height: 4px;"></span></button>
+                <button type="button" class="btn-size-dot active" data-size="5" title="普通 (5px)"><span style="width: 7px; height: 7px;"></span></button>
+                <button type="button" class="btn-size-dot" data-size="10" title="太い (10px)"><span style="width: 11px; height: 11px;"></span></button>
+                <button type="button" class="btn-size-dot" data-size="18" title="極太 (18px)"><span style="width: 15px; height: 15px;"></span></button>
+              </div>
+            </div>
+
+            <!-- Color Palette & Native Picker -->
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+                <span style="font-size: 0.72rem; font-weight: 800; color: var(--text-sub);">色を選択:</span>
+                <label class="custom-color-picker-label" title="好きな色を自由に選択できます">
+                  <span>🎨 自由選択</span>
+                  <input type="color" id="avatarColorPicker" value="#0f172a" class="native-color-input" />
+                </label>
+              </div>
+              <div class="color-palette-grid" id="canvasColorPalette">
+                <button type="button" class="color-swatch active" data-color="#0f172a" style="background: #0f172a;" title="黒"></button>
+                <button type="button" class="color-swatch" data-color="#e11d48" style="background: #e11d48;" title="赤"></button>
+                <button type="button" class="color-swatch" data-color="#2563eb" style="background: #2563eb;" title="青"></button>
+                <button type="button" class="color-swatch" data-color="#059669" style="background: #059669;" title="緑"></button>
+                <button type="button" class="color-swatch" data-color="#eab308" style="background: #eab308;" title="黄"></button>
+                <button type="button" class="color-swatch" data-color="#ea580c" style="background: #ea580c;" title="橙"></button>
+                <button type="button" class="color-swatch" data-color="#9333ea" style="background: #9333ea;" title="紫"></button>
+                <button type="button" class="color-swatch" data-color="#ec4899" style="background: #ec4899;" title="桃"></button>
+                <button type="button" class="color-swatch" data-color="#06b6d4" style="background: #06b6d4;" title="水色"></button>
+                <button type="button" class="color-swatch" data-color="#78350f" style="background: #78350f;" title="茶"></button>
+                <button type="button" class="color-swatch" data-color="#ffffff" style="background: #ffffff; border-color: #cbd5e1;" title="白"></button>
+              </div>
+            </div>
+
+            <!-- Canvas Action Buttons: Undo, Clear, Preset/Sample -->
+            <div style="display: flex; gap: 4px; margin-top: 4px;">
+              <button type="button" class="btn-canvas-action" id="btnAvatarUndo" title="1つ前の状態に戻す">
+                ↩️ 戻す
+              </button>
+              <button type="button" class="btn-canvas-action" id="btnAvatarClear" title="全消去して白紙にする">
+                🗑️ クリア
+              </button>
+              <button type="button" class="btn-canvas-action" id="btnAvatarSampleWolf" title="人狼サンプルアイコンを描画">
+                🐺 サンプル
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <button type="button" class="btn-secondary" id="btnSaveAvatar" style="width: 100%; padding: 8px 14px; font-size: 0.88rem; margin-top: 8px; font-weight: 800;">
+          🖼️ アイコンを保存
         </button>
       </div>
 

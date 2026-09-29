@@ -194,6 +194,13 @@ async function broadcastActiveRoomsList() {
   }
 }
 
+function generateBotAvatar(name) {
+  const char = (name || 'B').trim().charAt(0);
+  const colors = ['%23059669', '%230284c7', '%237c3aed', '%23d97706', '%23e11d48'];
+  const col = colors[Math.abs((name || '').charCodeAt(0) || 0) % colors.length];
+  return `data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="${col}"/><text x="20" y="26" font-size="18" text-anchor="middle" fill="white" font-weight="bold">${encodeURIComponent(char)}</text></svg>`;
+}
+
 function getRoomSnapshot(room) {
   if (!room) return null;
   const playersObj = {};
@@ -201,6 +208,7 @@ function getRoomSnapshot(room) {
     playersObj[id] = {
       id: p.id,
       nickname: p.nickname || 'プレイヤー',
+      avatarIcon: p.avatarIcon || '',
       isHost: !!p.isHost,
       isAlive: p.isAlive !== false,
       isVcOn: p.isVcOn !== false,
@@ -387,6 +395,7 @@ app.post('/api/jinrou/rooms', (req, res) => {
   room.players.set(hostId, {
     id: hostId,
     nickname: hostNickname,
+    avatarIcon: data.avatarIcon || '',
     isHost: true,
     isAlive: true,
     isVcOn: true,
@@ -474,6 +483,7 @@ async function ensureRoomInMemory(code, roomData = null) {
           room.players.set(pId, {
             id: pId,
             nickname: (typeof p === 'object' && p) ? (p.nickname || p.name || `プレイヤー${idx + 1}`) : String(p),
+            avatarIcon: (typeof p === 'object' && p && p.avatarIcon) ? p.avatarIcon : '',
             isHost: (typeof p === 'object' && p) ? (p.isHost ?? (idx === 0)) : (idx === 0),
             isAlive: (typeof p === 'object' && p) ? (p.isAlive !== false) : true,
             isVcOn: (typeof p === 'object' && p) ? (p.isVcOn !== false) : true,
@@ -488,6 +498,7 @@ async function ensureRoomInMemory(code, roomData = null) {
             room.players.set(pId, {
               id: pId,
               nickname: pInfo.nickname || pInfo.name || 'プレイヤー',
+              avatarIcon: pInfo.avatarIcon || '',
               isHost: !!pInfo.isHost || (hostId === pId),
               isAlive: pInfo.isAlive !== false,
               isVcOn: pInfo.isVcOn !== false,
@@ -504,6 +515,7 @@ async function ensureRoomInMemory(code, roomData = null) {
       room.players.set(hostId, {
         id: hostId,
         nickname: hostNickname,
+        avatarIcon: data.avatarIcon || '',
         isHost: true,
         isAlive: true,
         isVcOn: true,
@@ -521,7 +533,7 @@ async function ensureRoomInMemory(code, roomData = null) {
 
 app.post('/api/jinrou/rooms/:code/join', async (req, res) => {
   const cleanCode = (req.params.code || '').toString().replace(/^[#＃]/, '').trim();
-  const { playerId, playerNickname, isVcOn, roomData } = req.body;
+  const { playerId, playerNickname, isVcOn, roomData, avatarIcon } = req.body;
   const room = await ensureRoomInMemory(cleanCode, roomData);
 
   if (!room) return res.status(404).json({ error: `部屋（#${cleanCode}）が見つかりませんでした。コードをご確認ください。` });
@@ -533,6 +545,7 @@ app.post('/api/jinrou/rooms/:code/join', async (req, res) => {
   room.players.set(playerId, {
     id: playerId,
     nickname: playerNickname || 'プレイヤー',
+    avatarIcon: avatarIcon || (roomData?.players?.[playerId]?.avatarIcon) || '',
     isHost: room.hostId === playerId,
     isAlive: true,
     isVcOn: isVcOn !== false,
@@ -577,10 +590,12 @@ app.post('/api/jinrou/rooms/:code/chat', async (req, res) => {
   if (!rawText) return res.status(400).json({ error: 'メッセージが空です' });
   if (rawText.length > 20) rawText = rawText.slice(0, 20);
 
+  const senderAvatar = (req.body && req.body.senderAvatar) || (room.players.get(senderId)?.avatarIcon) || '';
   const chatMsg = {
     id: id || ('msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)),
     senderId: senderId || 'anon',
     senderName: senderName || (room.players.get(senderId)?.nickname) || 'プレイヤー',
+    senderAvatar,
     text: rawText,
     timestamp: Date.now()
   };
@@ -697,6 +712,7 @@ wss.on('connection', (ws) => {
           room.players.set(payload.playerId, {
             id: payload.playerId,
             nickname: hostNickname,
+            avatarIcon: payload.avatarIcon || '',
             isHost: true,
             isAlive: true,
             isVcOn: payload.isVcOn !== false,
@@ -728,6 +744,7 @@ wss.on('connection', (ws) => {
           room.players.set(dummyId, {
             id: dummyId,
             nickname: dummyName,
+            avatarIcon: generateBotAvatar(dummyName),
             isHost: false,
             isAlive: true,
             isVcOn: false,
@@ -771,6 +788,7 @@ wss.on('connection', (ws) => {
           room.players.set(payload.playerId, {
             id: payload.playerId,
             nickname: payload.nickname || 'プレイヤー',
+            avatarIcon: payload.avatarIcon || '',
             isHost: room.hostId === payload.playerId,
             isAlive: true,
             isVcOn: payload.isVcOn !== false,
@@ -832,6 +850,7 @@ wss.on('connection', (ws) => {
           room.players.set(requesterId, {
             id: requesterId,
             nickname: requesterNickname,
+            avatarIcon: payload.avatarIcon || '',
             isHost: room.hostId === requesterId,
             isAlive: true,
             isVcOn,
@@ -1033,6 +1052,25 @@ wss.on('connection', (ws) => {
           break;
         }
 
+        // --- Profile (Nickname / Avatar Icon) Updates ---
+        case 'UPDATE_PROFILE': {
+          const pId = payload.playerId || clientPlayerId;
+          const code = (payload.roomCode || clientRoomCode || ws._roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+          if (code && rooms.has(code)) {
+            const room = rooms.get(code);
+            if (room.players.has(pId)) {
+              const p = room.players.get(pId);
+              if (payload.nickname) p.nickname = payload.nickname.slice(0, 8);
+              if (payload.avatarIcon !== undefined) p.avatarIcon = payload.avatarIcon;
+              if (p.isHost && payload.nickname) room.hostNickname = payload.nickname.slice(0, 8);
+              const snap = getRoomSnapshot(room);
+              broadcastToRoom(code, { type: 'ROOM_UPDATE', payload: snap });
+              broadcastActiveRoomsList();
+            }
+          }
+          break;
+        }
+
         // --- Top-Left Chat Messages (Max 20 chars, format: [User]: [Content]) ---
         case 'CHAT_MESSAGE': {
           const code = (payload.roomCode || clientRoomCode || ws._roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
@@ -1054,11 +1092,13 @@ wss.on('connection', (ws) => {
             rawText = rawText.slice(0, 20); // Strict 20 char max
           }
 
+          const senderAvatar = payload.senderAvatar || (room.players.get(clientPlayerId)?.avatarIcon) || '';
           const senderName = payload.senderName || (room.players.get(clientPlayerId)?.nickname) || 'プレイヤー';
           const chatMsg = {
             id: payload.id || ('msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)),
             senderId: payload.senderId || clientPlayerId,
             senderName,
+            senderAvatar,
             text: rawText,
             timestamp: Date.now()
           };
