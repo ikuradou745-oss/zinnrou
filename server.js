@@ -248,12 +248,33 @@ function getRoomSnapshot(room) {
 }
 
 function broadcastToRoom(roomCode, message, excludeWs = null) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
+  const cleanCode = (roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const room = rooms.get(cleanCode);
   const payload = typeof message === 'string' ? message : JSON.stringify(message);
-  for (const client of room.sockets.values()) {
-    if (client && client.readyState === WebSocket.OPEN && client !== excludeWs) {
-      try { client.send(payload); } catch (e) {}
+  const sentSockets = new Set();
+
+  if (room && room.sockets) {
+    for (const client of room.sockets.values()) {
+      if (client && client.readyState === WebSocket.OPEN && client !== excludeWs) {
+        try {
+          client.send(payload);
+          sentSockets.add(client);
+        } catch (e) {}
+      }
+    }
+  }
+
+  // Also check wss.clients to ensure no reconnected socket is missed
+  if (typeof wss !== 'undefined' && wss && wss.clients) {
+    for (const client of wss.clients) {
+      if (client && client.readyState === WebSocket.OPEN && client !== excludeWs && !sentSockets.has(client)) {
+        if (client._roomCode === cleanCode) {
+          try {
+            client.send(payload);
+            sentSockets.add(client);
+          } catch (e) {}
+        }
+      }
     }
   }
 }
@@ -637,6 +658,8 @@ wss.on('connection', (ws) => {
           const roomName = (payload.name || payload.roomName || `${hostNickname}の部屋`).toString().slice(0, 8);
           clientRoomCode = code;
           clientPlayerId = payload.playerId;
+          ws._roomCode = code;
+          ws._playerId = payload.playerId;
 
           let room = rooms.get(code);
           if (!room) {
@@ -742,6 +765,8 @@ wss.on('connection', (ws) => {
 
           clientRoomCode = code;
           clientPlayerId = payload.playerId;
+          ws._roomCode = code;
+          ws._playerId = payload.playerId;
 
           room.players.set(payload.playerId, {
             id: payload.playerId,
@@ -802,6 +827,8 @@ wss.on('connection', (ws) => {
           // Direct immediate join (ユーザー指示: コード入力の時招待はいらない、即入室)
           clientRoomCode = code;
           clientPlayerId = requesterId;
+          ws._roomCode = code;
+          ws._playerId = requesterId;
           room.players.set(requesterId, {
             id: requesterId,
             nickname: requesterNickname,
@@ -1008,14 +1035,16 @@ wss.on('connection', (ws) => {
 
         // --- Top-Left Chat Messages (Max 20 chars, format: [User]: [Content]) ---
         case 'CHAT_MESSAGE': {
-          const code = (payload.roomCode || clientRoomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+          const code = (payload.roomCode || clientRoomCode || ws._roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
           if (!code) return;
           const room = rooms.get(code) || await ensureRoomInMemory(code);
           if (!room) return;
 
           clientRoomCode = code;
+          ws._roomCode = code;
           if (payload.senderId) {
             clientPlayerId = payload.senderId;
+            ws._playerId = payload.senderId;
             room.sockets.set(clientPlayerId, ws);
           }
 
@@ -1027,7 +1056,7 @@ wss.on('connection', (ws) => {
 
           const senderName = payload.senderName || (room.players.get(clientPlayerId)?.nickname) || 'プレイヤー';
           const chatMsg = {
-            id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            id: payload.id || ('msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)),
             senderId: payload.senderId || clientPlayerId,
             senderName,
             text: rawText,
@@ -1151,10 +1180,10 @@ async function handleLeave(ws, roomCode, playerId, isExplicitLeave = false, forc
     room.pendingRequests.delete(playerId);
   }
 
-  // If no real players remain OR if the host leaves while the room is in the lobby waiting:
+  // If no real players remain OR if the host leaves:
   const realPlayersLeft = Array.from(room.players.keys()).filter(id => !id.startsWith('dummy_')).length;
-  const isHostLeavingLobby = (room.hostId === playerId || forceHost) && room.status === 'waiting';
-  const shouldDeleteRoom = (room.players.size === 0) || (realPlayersLeft === 0) || isHostLeavingLobby;
+  const isHostLeaving = (room.hostId === playerId || forceHost);
+  const shouldDeleteRoom = (room.players.size === 0) || (realPlayersLeft === 0) || isHostLeaving;
 
   if (shouldDeleteRoom) {
     if (room.timerInterval) clearInterval(room.timerInterval);

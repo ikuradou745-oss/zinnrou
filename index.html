@@ -824,6 +824,143 @@
     .role-badge.villager { background: var(--sky-light); color: var(--villager-color); }
     .role-badge.werewolf { background: var(--crimson-light); color: var(--werewolf-color); }
 
+    /* Dedicated Fullscreen Room Waiting View (部屋の待機画面) */
+    #roomWaitingScreenView {
+      position: absolute;
+      top: 65px;
+      left: 0;
+      width: 100%;
+      height: calc(100% - 65px);
+      background: var(--bg-main);
+      display: none;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 16px 24px 30px;
+      z-index: 40;
+    }
+    .waiting-header-banner {
+      background: #ffffff;
+      border: 1.5px solid var(--border-color);
+      border-radius: 18px;
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 16px;
+    }
+    .waiting-room-title {
+      font-size: 1.25rem;
+      font-weight: 900;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .waiting-chips-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .waiting-chip {
+      background: #f1f5f9;
+      border: 1px solid var(--border-color);
+      border-radius: 9999px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      font-weight: 800;
+      color: var(--text-sub);
+    }
+    .waiting-content-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      flex: 1;
+      min-height: 0;
+    }
+    @media (max-width: 768px) {
+      .waiting-content-grid {
+        grid-template-columns: 1fr;
+      }
+      #roomWaitingScreenView {
+        padding: 12px 14px 24px;
+      }
+    }
+    .waiting-card {
+      background: #ffffff;
+      border: 1.5px solid var(--border-color);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+    }
+    .waiting-card-title {
+      font-size: 0.95rem;
+      font-weight: 900;
+      color: var(--text-main);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .embedded-chat-box {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 240px;
+    }
+    .embedded-chat-messages {
+      flex: 1;
+      height: 220px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 10px;
+      background: #f8fafc;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .embedded-chat-bar {
+      display: flex;
+      gap: 8px;
+    }
+    .embedded-chat-input {
+      flex: 1;
+      background: #ffffff;
+      border: 1.5px solid var(--border-color);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-main);
+      outline: none;
+    }
+    .embedded-chat-input:focus {
+      border-color: var(--sky);
+      box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.12);
+    }
+    .btn-embedded-send {
+      background: var(--crimson);
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      padding: 8px 16px;
+      font-weight: 800;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+    .btn-embedded-send:hover {
+      background: var(--crimson-hover);
+    }
+
     /* In-Game View Container */
     #gameView {
       position: absolute;
@@ -1408,7 +1545,7 @@
     </header>
 
     <!-- Center Section: 3 Actions -->
-    <main class="center-section">
+    <main class="center-section" id="mainScreenView">
       <div class="game-hero">
         <h1 class="game-main-title">人狼</h1>
         <p class="game-subtitle">WEREWOLF ONLINE</p>
@@ -1431,6 +1568,100 @@
         </button>
       </div>
     </main>
+
+    <!-- Dedicated Room Waiting Screen (部屋の待機画面) -->
+    <div id="roomWaitingScreenView">
+      <div class="waiting-header-banner">
+        <div>
+          <div class="waiting-room-title">
+            <span>🏠</span>
+            <span id="waitingRoomNameText">人狼部屋</span>
+          </div>
+          <div class="waiting-chips-bar" style="margin-top: 6px;">
+            <span class="room-code-badge" style="margin-bottom: 0; padding: 4px 12px; font-size: 1.1rem;">
+              <span id="waitingRoomCodeText">#----</span>
+              <button class="btn-copy-code" id="btnWaitingCopyCode">コピー</button>
+            </span>
+            <span class="waiting-chip" id="waitingPlayerCapChip">👥 定員: 5人 (最低3人)</span>
+            <span class="waiting-chip" id="waitingTimeChip">⏳ 話し合い: 60秒</span>
+            <span class="waiting-chip" id="waitingModeChip">🎭 ノーマル配役</span>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <button class="btn-voice-toggle active" id="btnWaitingVcToggle" title="ボイスチャットON/OFF">
+            <span id="waitingVcIcon">🔊</span>
+            <span id="waitingVcLabel">VC: ON</span>
+          </button>
+          <button class="btn-voice-toggle active" id="btnWaitingMicToggle" title="マイクON/OFF">
+            <span id="waitingMicIcon">🎙️</span>
+            <span id="waitingMicLabel">マイク: ON</span>
+          </button>
+          <button type="button" class="btn-voice-toggle" id="btnWaitingForceVc" title="VC強制再接続・端末設定" style="font-weight: 800; color: var(--crimson); border-color: rgba(225,29,72,0.35); background: var(--crimson-light);">
+            ⚡ VC強制
+          </button>
+        </div>
+      </div>
+
+      <div class="waiting-content-grid">
+        <!-- Left Column: Players Roster & Start / Add Bot Buttons -->
+        <div class="waiting-card">
+          <div class="waiting-card-title">
+            <span>👥 参加プレイヤー (<span id="waitingPlayerCount">1</span> / <span id="waitingMaxCount">5</span>人)</span>
+            <button type="button" class="btn-secondary" id="btnWaitingAddDummy" style="padding: 4px 10px; font-size: 0.76rem; font-weight: 800; color: var(--emerald); border-color: rgba(5,150,105,0.35); background: var(--emerald-light); border-radius: 9999px;">
+              🤖 Bot追加 (+1人)
+            </button>
+          </div>
+
+          <div class="min-player-warning" id="waitingMinPlayerWarning">
+            <span>⚠️</span>
+            <span id="waitingMinNotice">ゲームを開始するには最低3人のプレイヤーが必要です（現在: 1/3人）</span>
+          </div>
+
+          <div class="lobby-roster" id="waitingPlayerRoster" style="max-height: 280px; flex: 1;"></div>
+
+          <div style="display: flex; gap: 10px; margin-top: 14px;">
+            <button class="btn-primary" id="btnWaitingStartGame" disabled style="flex: 2; padding: 12px; font-size: 0.95rem;">
+              最低3人必要 (現在: 1/3人)
+            </button>
+            <button class="btn-secondary" id="btnWaitingLeaveRoom" style="flex: 1; padding: 12px; font-size: 0.9rem; color: var(--crimson);">
+              🚪 部屋を退出
+            </button>
+          </div>
+        </div>
+
+        <!-- Right Column: In-Room Live Chat -->
+        <div class="waiting-card">
+          <div class="waiting-card-title">
+            <span>💬 部屋チャット (リアルタイム)</span>
+            <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600;">※最大20文字</span>
+          </div>
+
+          <div class="embedded-chat-box">
+            <div class="embedded-chat-messages" id="waitingChatMessagesBox">
+              <div class="chat-message-item" style="color: var(--text-muted); font-size: 0.75rem;">
+                <span>※ 入室中のメンバーにリアルタイムで届きます</span>
+              </div>
+            </div>
+
+            <div class="embedded-chat-bar">
+              <div class="chat-input-wrapper" style="flex: 1;">
+                <input 
+                  type="text" 
+                  id="waitingChatInput" 
+                  class="embedded-chat-input" 
+                  placeholder="メッセージを入力 (20文字以内)..." 
+                  maxlength="20" 
+                  autocomplete="off"
+                />
+                <span class="chat-counter" id="waitingChatCounter">0/20</span>
+              </div>
+              <button class="btn-embedded-send" id="btnWaitingSendChat">送信</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
   </div>
 
@@ -1750,7 +1981,7 @@
           <div class="input-error-msg" id="roomNameErrorMsg">部屋の名前は2文字〜8文字で入力してください</div>
         </div>
 
-        <!-- 1. 参加定員人数 (2人〜12人) -->
+        <!-- 1. 参加定員人数 (3人〜12人) -->
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
             <label class="form-label" style="margin-bottom: 0;">👥 参加定員人数</label>
@@ -1760,13 +1991,13 @@
             type="range" 
             id="roomPlayerCountSlider" 
             class="range-slider" 
-            min="2" 
+            min="3" 
             max="12" 
             step="1" 
             value="5" 
           />
           <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-top: -4px;">
-            <span>最小 2人</span>
+            <span>最小 3人</span>
             <span>標準 5〜8人</span>
             <span>最大 12人</span>
           </div>
@@ -2120,6 +2351,29 @@
 
       <!-- Players Grid -->
       <div class="players-table-grid" id="gamePlayersGrid"></div>
+
+      <!-- In-Game Chat Box -->
+      <div class="game-chat-card" style="width: 100%; max-width: 680px; margin-top: 14px; background: #ffffff; border: 1.5px solid var(--border-color); border-radius: 16px; padding: 14px; box-shadow: var(--shadow-sm); text-align: left;">
+        <div style="font-size: 0.88rem; font-weight: 800; color: var(--text-main); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+          <span>💬 ゲームチャット (話し合い・投票・情報共有)</span>
+          <span style="font-size: 0.72rem; color: var(--text-muted);">20文字以内</span>
+        </div>
+        <div class="embedded-chat-messages" id="gameChatMessagesBox" style="height: 130px; margin-bottom: 8px;"></div>
+        <div class="embedded-chat-bar">
+          <div class="chat-input-wrapper" style="flex: 1;">
+            <input 
+              type="text" 
+              id="gameChatInput" 
+              class="embedded-chat-input" 
+              placeholder="メッセージを入力 (20文字以内)..." 
+              maxlength="20" 
+              autocomplete="off"
+            />
+            <span class="chat-counter" id="gameChatCounter">0/20</span>
+          </div>
+          <button class="btn-embedded-send" id="btnGameSendChat">送信</button>
+        </div>
+      </div>
 
       <!-- Game Actions Controls -->
       <div style="display: flex; gap: 10px; margin-top: 10px;" id="gameControlsRow">

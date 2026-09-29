@@ -348,6 +348,67 @@ const lobbyMicLabel = document.getElementById('lobbyMicLabel');
 const lobbySpeakingRing = document.getElementById('lobbySpeakingRing');
 const btnLobbyAddDummy = document.getElementById('btnLobbyAddDummy');
 
+// Dedicated Room Waiting Screen Elements
+const mainScreenView = document.getElementById('mainScreenView');
+const roomWaitingScreenView = document.getElementById('roomWaitingScreenView');
+const waitingRoomNameText = document.getElementById('waitingRoomNameText');
+const waitingRoomCodeText = document.getElementById('waitingRoomCodeText');
+const btnWaitingCopyCode = document.getElementById('btnWaitingCopyCode');
+const waitingPlayerCapChip = document.getElementById('waitingPlayerCapChip');
+const waitingTimeChip = document.getElementById('waitingTimeChip');
+const waitingModeChip = document.getElementById('waitingModeChip');
+const btnWaitingVcToggle = document.getElementById('btnWaitingVcToggle');
+const waitingVcIcon = document.getElementById('waitingVcIcon');
+const waitingVcLabel = document.getElementById('waitingVcLabel');
+const btnWaitingMicToggle = document.getElementById('btnWaitingMicToggle');
+const waitingMicIcon = document.getElementById('waitingMicIcon');
+const waitingMicLabel = document.getElementById('waitingMicLabel');
+const btnWaitingForceVc = document.getElementById('btnWaitingForceVc');
+const waitingPlayerCount = document.getElementById('waitingPlayerCount');
+const waitingMaxCount = document.getElementById('waitingMaxCount');
+const btnWaitingAddDummy = document.getElementById('btnWaitingAddDummy');
+const waitingMinPlayerWarning = document.getElementById('waitingMinPlayerWarning');
+const waitingMinNotice = document.getElementById('waitingMinNotice');
+const waitingPlayerRoster = document.getElementById('waitingPlayerRoster');
+const btnWaitingStartGame = document.getElementById('btnWaitingStartGame');
+const btnWaitingLeaveRoom = document.getElementById('btnWaitingLeaveRoom');
+
+// Embedded Chat Elements (Waiting Screen & Game Screen)
+const waitingChatMessagesBox = document.getElementById('waitingChatMessagesBox');
+const waitingChatInput = document.getElementById('waitingChatInput');
+const waitingChatCounter = document.getElementById('waitingChatCounter');
+const btnWaitingSendChat = document.getElementById('btnWaitingSendChat');
+const gameChatMessagesBox = document.getElementById('gameChatMessagesBox');
+const gameChatInput = document.getElementById('gameChatInput');
+const gameChatCounter = document.getElementById('gameChatCounter');
+const btnGameSendChat = document.getElementById('btnGameSendChat');
+
+// Master Screen State Switcher
+function switchScreen(state) {
+  // state: 'main' | 'waiting' | 'game'
+  if (state === 'main') {
+    if (mainScreenView) mainScreenView.style.display = 'flex';
+    if (roomWaitingScreenView) roomWaitingScreenView.style.display = 'none';
+    if (gameView) gameView.style.display = 'none';
+    closeModal(onlinePlayModal);
+    closeModal(roleAnnouncementModal);
+    if (topLeftChatContainer) topLeftChatContainer.style.display = 'none';
+  } else if (state === 'waiting') {
+    if (mainScreenView) mainScreenView.style.display = 'none';
+    if (roomWaitingScreenView) roomWaitingScreenView.style.display = 'flex';
+    if (gameView) gameView.style.display = 'none';
+    closeModal(onlinePlayModal);
+    closeModal(roleAnnouncementModal);
+    if (topLeftChatContainer) topLeftChatContainer.style.display = 'block';
+  } else if (state === 'game') {
+    if (mainScreenView) mainScreenView.style.display = 'none';
+    if (roomWaitingScreenView) roomWaitingScreenView.style.display = 'none';
+    if (gameView) gameView.style.display = 'flex';
+    closeModal(onlinePlayModal);
+    if (topLeftChatContainer) topLeftChatContainer.style.display = 'block';
+  }
+}
+
 // Top-Left Chat
 const topLeftChatContainer = document.getElementById('topLeftChatContainer');
 const chatModeBadge = document.getElementById('chatModeBadge');
@@ -511,10 +572,16 @@ function handleSocketMessage(msg) {
       if (payload && payload.code) {
         activeRoomCode = payload.code;
         isHost = (payload.hostId === localPlayerId);
-        if (onlineLobbyView.style.display !== 'block') {
-          enterLobbyView(payload.code, payload);
+        if (payload.status === 'in_game' && payload.game) {
+          if (!gameView || gameView.style.display !== 'flex') {
+            switchScreen('game');
+            updateGamePhaseUI(payload);
+          }
+        } else {
+          if (!roomWaitingScreenView || roomWaitingScreenView.style.display !== 'flex') {
+            enterLobbyView(payload.code, payload);
+          }
         }
-        openModal(onlinePlayModal);
       }
       if (payload && Array.isArray(payload.chatHistory)) {
         payload.chatHistory.forEach(m => {
@@ -529,11 +596,8 @@ function handleSocketMessage(msg) {
       activeRoomCode = null;
       isHost = false;
       currentRoomData = null;
-      onlineLobbyView.style.display = 'none';
-      onlineHubView.style.display = 'block';
-      topLeftChatContainer.style.display = 'none';
-      gameView.style.display = 'none';
-      closeModal(onlinePlayModal);
+      switchScreen('main');
+      loadActiveRooms();
       break;
     }
     case 'PEER_JOINED': {
@@ -580,6 +644,12 @@ function handleSocketMessage(msg) {
     }
     case 'PHASE_CHANGED': {
       currentRoomData = payload;
+      closeModal(roleAnnouncementModal);
+      if (payload && payload.status === 'in_game' && payload.game) {
+        if (!gameView || gameView.style.display !== 'flex') {
+          switchScreen('game');
+        }
+      }
       updateGamePhaseUI(payload);
       break;
     }
@@ -635,7 +705,6 @@ function handleSocketMessage(msg) {
       isHost = (payload.hostId === localPlayerId);
       currentRoomData = payload;
       enterLobbyView(payload.code, payload);
-      openModal(onlinePlayModal);
       updateLobbyUI(payload);
       break;
     }
@@ -727,53 +796,65 @@ if (roomBroadcastChannel) {
           activeRoomCode = null;
           isHost = false;
           currentRoomData = null;
-          onlineLobbyView.style.display = 'none';
-          onlineHubView.style.display = 'block';
-          topLeftChatContainer.style.display = 'none';
-          gameView.style.display = 'none';
-          closeModal(onlinePlayModal);
+          switchScreen('main');
+          loadActiveRooms();
         }
       }
     }
   });
 }
 
-// --- Top-Left Chat ---
+// --- Multi-Surface Real-Time Chat ---
 function appendChatMessage(senderName, text, type = 'other', msgId = null) {
   if (msgId && displayedChatMsgIds.has(msgId)) return;
   if (msgId) displayedChatMsgIds.add(msgId);
 
-  const item = document.createElement('div');
-  item.className = 'chat-message-item';
   const isMe = type === 'me';
   const isSys = type === 'system';
+  const targetBoxes = [chatMessagesBox, waitingChatMessagesBox, gameChatMessagesBox];
 
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'chat-sender-name' + (isMe ? ' is-me' : isSys ? ' is-system' : '');
-  nameSpan.textContent = `${senderName}:`;
+  targetBoxes.forEach((box) => {
+    if (!box) return;
+    const item = document.createElement('div');
+    item.className = 'chat-message-item';
 
-  const textSpan = document.createElement('span');
-  textSpan.className = 'chat-content-text';
-  textSpan.textContent = ` ${text}`;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'chat-sender-name' + (isMe ? ' is-me' : isSys ? ' is-system' : '');
+    nameSpan.textContent = `${senderName}:`;
 
-  item.appendChild(nameSpan);
-  item.appendChild(textSpan);
-  chatMessagesBox.appendChild(item);
-  chatMessagesBox.scrollTop = chatMessagesBox.scrollHeight;
+    const textSpan = document.createElement('span');
+    textSpan.className = 'chat-content-text';
+    textSpan.textContent = ` ${text}`;
+
+    item.appendChild(nameSpan);
+    item.appendChild(textSpan);
+    box.appendChild(item);
+    box.scrollTop = box.scrollHeight;
+  });
 
   if (chatExpandableArea) chatExpandableArea.style.display = 'block';
   if (btnChatToggle) btnChatToggle.textContent = '▼';
 }
 
-function sendCurrentChat() {
-  let val = (chatInput.value || '').trim();
+function sendCurrentChat(explicitText = null) {
+  let val = '';
+  if (explicitText !== null && explicitText !== undefined && String(explicitText).trim().length > 0) {
+    val = String(explicitText).trim();
+  } else {
+    const wVal = (waitingChatInput ? waitingChatInput.value : '').trim();
+    const gVal = (gameChatInput ? gameChatInput.value : '').trim();
+    const cVal = (chatInput ? chatInput.value : '').trim();
+    val = wVal || gVal || cVal || '';
+  }
+
   if (!val) return;
   if (val.length > 20) val = val.slice(0, 20); // strict 20 chars
 
   const msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const myName = localNickname || '自分';
+  const cleanCode = (activeRoomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
 
-  // 1. Instantly display on sender's screen!
+  // 1. Instantly display on sender's screen across all active chat boxes!
   appendChatMessage(myName, val, 'me', msgId);
   sound.playClick();
 
@@ -782,7 +863,7 @@ function sendCurrentChat() {
     try {
       roomBroadcastChannel.postMessage({
         type: 'ROOM_CHAT_SYNC',
-        roomCode: activeRoomCode,
+        roomCode: cleanCode,
         chatMsg: {
           id: msgId,
           senderId: localPlayerId,
@@ -795,17 +876,17 @@ function sendCurrentChat() {
   }
 
   // 3. Send over WebSocket if in a room
-  if (activeRoomCode) {
+  if (cleanCode) {
     sendWs('CHAT_MESSAGE', {
       id: msgId,
-      roomCode: activeRoomCode,
+      roomCode: cleanCode,
       senderId: localPlayerId,
       senderName: myName,
       text: val
     });
 
     // 4. REST endpoint fallback
-    fetch(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/chat`, {
+    fetch(`/api/jinrou/rooms/${encodeURIComponent(cleanCode)}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -817,33 +898,65 @@ function sendCurrentChat() {
     }).catch(() => {});
   }
 
-  chatInput.value = '';
-  chatCharCounter.textContent = '0/20';
+  // Clear all chat inputs & counters
+  if (chatInput) chatInput.value = '';
+  if (chatCharCounter) chatCharCounter.textContent = '0/20';
+  if (waitingChatInput) waitingChatInput.value = '';
+  if (waitingChatCounter) waitingChatCounter.textContent = '0/20';
+  if (gameChatInput) gameChatInput.value = '';
+  if (gameChatCounter) gameChatCounter.textContent = '0/20';
 }
 
-chatInput.addEventListener('input', (e) => {
-  let val = e.target.value;
-  if (val.length > 20) {
-    e.target.value = val.slice(0, 20);
-    val = e.target.value;
-  }
-  chatCharCounter.textContent = `${val.length}/20`;
-});
+// 1. Top-Left Floating Chat Events
+if (chatInput) {
+  chatInput.addEventListener('input', (e) => {
+    let val = e.target.value;
+    if (val.length > 20) { e.target.value = val.slice(0, 20); val = e.target.value; }
+    if (chatCharCounter) chatCharCounter.textContent = `${val.length}/20`;
+  });
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendCurrentChat(chatInput.value);
+  });
+}
+if (btnSendChat) btnSendChat.addEventListener('click', () => sendCurrentChat(chatInput ? chatInput.value : ''));
 
-chatInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendCurrentChat();
-});
-btnSendChat.addEventListener('click', sendCurrentChat);
+// 2. Waiting Screen Embedded Chat Events
+if (waitingChatInput) {
+  waitingChatInput.addEventListener('input', (e) => {
+    let val = e.target.value;
+    if (val.length > 20) { e.target.value = val.slice(0, 20); val = e.target.value; }
+    if (waitingChatCounter) waitingChatCounter.textContent = `${val.length}/20`;
+  });
+  waitingChatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendCurrentChat(waitingChatInput.value);
+  });
+}
+if (btnWaitingSendChat) btnWaitingSendChat.addEventListener('click', () => sendCurrentChat(waitingChatInput ? waitingChatInput.value : ''));
 
-btnChatToggle.addEventListener('click', () => {
-  if (chatExpandableArea.style.display === 'none') {
-    chatExpandableArea.style.display = 'block';
-    btnChatToggle.textContent = '▼';
-  } else {
-    chatExpandableArea.style.display = 'none';
-    btnChatToggle.textContent = '▲';
-  }
-});
+// 3. Game Screen Embedded Chat Events
+if (gameChatInput) {
+  gameChatInput.addEventListener('input', (e) => {
+    let val = e.target.value;
+    if (val.length > 20) { e.target.value = val.slice(0, 20); val = e.target.value; }
+    if (gameChatCounter) gameChatCounter.textContent = `${val.length}/20`;
+  });
+  gameChatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendCurrentChat(gameChatInput.value);
+  });
+}
+if (btnGameSendChat) btnGameSendChat.addEventListener('click', () => sendCurrentChat(gameChatInput ? gameChatInput.value : ''));
+
+if (btnChatToggle) {
+  btnChatToggle.addEventListener('click', () => {
+    if (chatExpandableArea.style.display === 'none') {
+      chatExpandableArea.style.display = 'block';
+      btnChatToggle.textContent = '▼';
+    } else {
+      chatExpandableArea.style.display = 'none';
+      btnChatToggle.textContent = '▲';
+    }
+  });
+}
 
 // --- VC & Mic Control Functions ---
 function setVcState(enabled) {
@@ -1063,53 +1176,87 @@ btnModeOriginal.addEventListener('click', () => {
   updateCreateRoomUI();
 });
 
-// --- Lobby View ---
+// --- Lobby & Waiting Screen View ---
 function updateLobbyUI(room) {
   if (!room) return;
   activeRoomCode = room.code;
-  lobbyRoomCodeText.textContent = `#${room.code}`;
-  if (lobbyRoomNameText) {
-    lobbyRoomNameText.textContent = room.name || `${room.hostNickname || 'ホスト'}の部屋`;
-  }
-  if (gameRoomNameText) {
-    gameRoomNameText.textContent = room.name || `${room.hostNickname || 'ホスト'}の部屋`;
-  }
+  if (lobbyRoomCodeText) lobbyRoomCodeText.textContent = `#${room.code}`;
+  if (waitingRoomCodeText) waitingRoomCodeText.textContent = `#${room.code}`;
+  if (gameRoomCodeText) gameRoomCodeText.textContent = `#${room.code}`;
+
+  const displayName = room.name || `${room.hostNickname || 'ホスト'}の部屋`;
+  if (lobbyRoomNameText) lobbyRoomNameText.textContent = displayName;
+  if (waitingRoomNameText) waitingRoomNameText.textContent = displayName;
+  if (gameRoomNameText) gameRoomNameText.textContent = displayName;
 
   const players = Object.values(room.players || {});
   const playerCount = players.length;
   const maxPlayers = room.maxPlayers || 5;
 
-  lobbyPlayerCount.textContent = playerCount;
-  lobbyPlayerMax.textContent = maxPlayers;
+  if (lobbyPlayerCount) lobbyPlayerCount.textContent = playerCount;
+  if (lobbyPlayerMax) lobbyPlayerMax.textContent = maxPlayers;
+  if (waitingPlayerCount) waitingPlayerCount.textContent = playerCount;
+  if (waitingMaxCount) waitingMaxCount.textContent = maxPlayers;
+
+  if (waitingPlayerCapChip) waitingPlayerCapChip.textContent = `👥 定員: ${maxPlayers}人 (最低3人)`;
+  if (waitingTimeChip) waitingTimeChip.textContent = `⏳ 話し合い: ${room.discussionTime || 60}秒`;
+  if (waitingModeChip) waitingModeChip.textContent = (room.roleMode === 'original' ? '🎭 カスタム配役' : '🎭 ノーマル配役');
 
   const hostNick = room.hostNickname || localNickname;
-  lobbyInvitePreviewText.textContent = `https://ikuradou745-oss.github.io/zinnrou/
-${hostNick}が呼んでるよ！参加コードは${room.code}だよ！`;
+  if (lobbyInvitePreviewText) {
+    lobbyInvitePreviewText.textContent = `https://ikuradou745-oss.github.io/zinnrou/\n${hostNick}が呼んでるよ！参加コードは${room.code}だよ！`;
+  }
 
-  lobbyPlayerRoster.innerHTML = '';
-  players.forEach((p) => {
-    const isMe = p.id === localPlayerId;
-    const row = document.createElement('div');
-    row.className = 'lobby-player-item';
-    row.id = `roster_${p.id}`;
-    row.innerHTML = `
-      <div class="lobby-player-info">
-        <span class="speaking-indicator-ring ${p.isSpeaking ? 'speaking' : ''}"></span>
-        <span>👤 ${p.nickname}</span>
-        ${p.isHost ? '<span style="font-size: 0.7rem; background: var(--crimson-light); color: var(--crimson); font-weight: 800; padding: 2px 6px; border-radius: 4px;">ホスト</span>' : ''}
-        ${isMe ? '<span style="font-size: 0.7rem; color: var(--sky); font-weight: 800;">(あなた)</span>' : ''}
-      </div>
-      <div class="lobby-player-voice-status">
-        <span>${!p.isVcOn ? '🔇(VC切)' : p.isMuted ? '🔇(消音)' : '🎙️'}</span>
-      </div>
-    `;
-    lobbyPlayerRoster.appendChild(row);
-  });
+  // Render modal roster
+  if (lobbyPlayerRoster) {
+    lobbyPlayerRoster.innerHTML = '';
+    players.forEach((p) => {
+      const isMe = p.id === localPlayerId;
+      const row = document.createElement('div');
+      row.className = 'lobby-player-item';
+      row.id = `roster_${p.id}`;
+      row.innerHTML = `
+        <div class="lobby-player-info">
+          <span class="speaking-indicator-ring ${p.isSpeaking ? 'speaking' : ''}"></span>
+          <span>👤 ${p.nickname}</span>
+          ${p.isHost ? '<span style="font-size: 0.7rem; background: var(--crimson-light); color: var(--crimson); font-weight: 800; padding: 2px 6px; border-radius: 4px;">ホスト</span>' : ''}
+          ${isMe ? '<span style="font-size: 0.7rem; color: var(--sky); font-weight: 800;">(あなた)</span>' : ''}
+        </div>
+        <div class="lobby-player-voice-status">
+          <span>${!p.isVcOn ? '🔇(VC切)' : p.isMuted ? '🔇(消音)' : '🎙️'}</span>
+        </div>
+      `;
+      lobbyPlayerRoster.appendChild(row);
+    });
+  }
+
+  // Render dedicated Waiting Screen roster
+  if (waitingPlayerRoster) {
+    waitingPlayerRoster.innerHTML = '';
+    players.forEach((p) => {
+      const isMe = p.id === localPlayerId;
+      const row = document.createElement('div');
+      row.className = 'lobby-player-item';
+      row.id = `waiting_roster_${p.id}`;
+      row.innerHTML = `
+        <div class="lobby-player-info">
+          <span class="speaking-indicator-ring ${p.isSpeaking ? 'speaking' : ''}"></span>
+          <span style="font-weight: 800; font-size: 0.95rem;">👤 ${p.nickname}</span>
+          ${p.isHost ? '<span style="font-size: 0.72rem; background: var(--crimson-light); color: var(--crimson); font-weight: 900; padding: 2px 8px; border-radius: 9999px;">👑 ホスト</span>' : ''}
+          ${isMe ? '<span style="font-size: 0.72rem; background: var(--sky-light); color: var(--sky); font-weight: 900; padding: 2px 8px; border-radius: 9999px;">(あなた)</span>' : ''}
+        </div>
+        <div class="lobby-player-voice-status">
+          <span style="font-weight: 700;">${!p.isVcOn ? '🔇(VC切)' : p.isMuted ? '🔇(消音)' : '🎙️ 通話中'}</span>
+        </div>
+      `;
+      waitingPlayerRoster.appendChild(row);
+    });
+  }
 
   // Strict Rule: Minimum 3 players required to start!
   const isMeHost = (room.hostId === localPlayerId);
 
-  // Render Host Pending Requests
+  // Render Host Pending Requests (if any)
   const pendingRequests = room.pendingRequests || [];
   if (isMeHost && pendingRequests.length > 0 && lobbyPendingRequestsSection) {
     lobbyPendingRequestsSection.style.display = 'block';
@@ -1157,25 +1304,53 @@ ${hostNick}が呼んでるよ！参加コードは${room.code}だよ！`;
     lobbyPendingRequestsSection.style.display = 'none';
   }
 
+  // Update Start Game button state
   if (isMeHost) {
-    btnLobbyStartGame.style.display = 'block';
+    if (btnLobbyStartGame) btnLobbyStartGame.style.display = 'block';
+    if (btnWaitingStartGame) btnWaitingStartGame.style.display = 'block';
+
     if (playerCount < 3) {
-      btnLobbyStartGame.disabled = true;
-      btnLobbyStartGame.textContent = `最低3人必要 (現在: ${playerCount}/3人)`;
-      lobbyMinPlayerWarning.style.display = 'flex';
-      lobbyMinPlayerNoticeText.textContent = `ゲームを開始するには最低3人のプレイヤーが必要です（現在: ${playerCount}/3人）`;
+      if (btnLobbyStartGame) {
+        btnLobbyStartGame.disabled = true;
+        btnLobbyStartGame.textContent = `最低3人必要 (現在: ${playerCount}/3人)`;
+      }
+      if (btnWaitingStartGame) {
+        btnWaitingStartGame.disabled = true;
+        btnWaitingStartGame.textContent = `最低3人必要 (現在: ${playerCount}/3人)`;
+      }
+      if (lobbyMinPlayerWarning) lobbyMinPlayerWarning.style.display = 'flex';
+      if (waitingMinPlayerWarning) waitingMinPlayerWarning.style.display = 'flex';
+      const warningText = `ゲームを開始するには最低3人のプレイヤーが必要です（現在: ${playerCount}/3人）。「Bot追加」で練習プレイヤーを追加できます。`;
+      if (lobbyMinPlayerNoticeText) lobbyMinPlayerNoticeText.textContent = warningText;
+      if (waitingMinNotice) waitingMinNotice.textContent = warningText;
     } else {
-      btnLobbyStartGame.disabled = false;
-      btnLobbyStartGame.textContent = `🐺 ゲームを開始する (${playerCount}人)`;
-      lobbyMinPlayerWarning.style.display = 'none';
+      if (btnLobbyStartGame) {
+        btnLobbyStartGame.disabled = false;
+        btnLobbyStartGame.textContent = `🐺 ゲームを開始する (${playerCount}人)`;
+      }
+      if (btnWaitingStartGame) {
+        btnWaitingStartGame.disabled = false;
+        btnWaitingStartGame.textContent = `🐺 ゲームを開始する (${playerCount}人)`;
+      }
+      if (lobbyMinPlayerWarning) lobbyMinPlayerWarning.style.display = 'none';
+      if (waitingMinPlayerWarning) waitingMinPlayerWarning.style.display = 'none';
     }
   } else {
-    btnLobbyStartGame.style.display = 'none';
+    if (btnLobbyStartGame) btnLobbyStartGame.style.display = 'none';
+    if (btnWaitingStartGame) {
+      btnWaitingStartGame.style.display = 'block';
+      btnWaitingStartGame.disabled = true;
+      btnWaitingStartGame.textContent = `ホストがゲームを開始するまで待機中... (${playerCount}人)`;
+    }
+    const nonHostText = `ホストがゲームを開始するまで待機中... (現在: ${playerCount}/3人 - 最低3人必要)`;
     if (playerCount < 3) {
-      lobbyMinPlayerWarning.style.display = 'flex';
-      lobbyMinPlayerNoticeText.textContent = `ホストがゲームを開始するまで待機中... (現在: ${playerCount}/3人 - 最低3人必要)`;
+      if (lobbyMinPlayerWarning) lobbyMinPlayerWarning.style.display = 'flex';
+      if (waitingMinPlayerWarning) waitingMinPlayerWarning.style.display = 'flex';
+      if (lobbyMinPlayerNoticeText) lobbyMinPlayerNoticeText.textContent = nonHostText;
+      if (waitingMinNotice) waitingMinNotice.textContent = nonHostText;
     } else {
-      lobbyMinPlayerWarning.style.display = 'none';
+      if (lobbyMinPlayerWarning) lobbyMinPlayerWarning.style.display = 'none';
+      if (waitingMinPlayerWarning) waitingMinPlayerWarning.style.display = 'none';
     }
   }
 }
@@ -1200,12 +1375,8 @@ function stopPresenceHeartbeat() {
 }
 
 function enterLobbyView(roomCode, roomData) {
-  onlineHubView.style.display = 'none';
-  onlineCreateRoomView.style.display = 'none';
-  onlineLobbyView.style.display = 'block';
-
-  topLeftChatContainer.style.display = 'block';
-  chatExpandableArea.style.display = 'block';
+  // Hide pre-room entry UI and show dedicated room waiting UI!
+  switchScreen('waiting');
 
   // Push browser history state so Browser Back button triggers leaving the room
   try {
@@ -1250,21 +1421,7 @@ function enterLobbyView(roomCode, roomData) {
   });
 }
 
-// Dummy Bot addition for instant testing (一人でも即テストプレイ可能)
-if (btnLobbyAddDummy) {
-  btnLobbyAddDummy.addEventListener('click', async () => {
-    if (!activeRoomCode) return;
-    sound.playClick();
-    showToast('🤖 練習用Botを追加しました (+1人)');
-    sendWs('ADD_DUMMY_PLAYER', { code: activeRoomCode });
-    try {
-      await fetch(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/add-dummy`, { method: 'POST' });
-    } catch (e) {}
-  });
-}
-
-// Start Game from Lobby
-btnLobbyStartGame.addEventListener('click', () => {
+function triggerStartGame() {
   const currentCount = currentRoomData ? Object.keys(currentRoomData.players || {}).length : 1;
   if (currentCount < 3) {
     sound.playClick();
@@ -1274,12 +1431,51 @@ btnLobbyStartGame.addEventListener('click', () => {
   sound.playWolfHowl();
   showToast('🐺 役職を配り、ゲームを開始します...');
   sendWs('START_GAME', { roomCode: activeRoomCode, playerId: localPlayerId });
-});
+}
+
+// Dummy Bot addition for instant testing (一人でも即テストプレイ可能)
+async function triggerAddDummy() {
+  if (!activeRoomCode) return;
+  sound.playClick();
+  showToast('🤖 練習用Botを追加しました (+1人)');
+  sendWs('ADD_DUMMY_PLAYER', { code: activeRoomCode });
+  try {
+    await fetch(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/add-dummy`, { method: 'POST' });
+  } catch (e) {}
+}
+
+if (btnLobbyAddDummy) btnLobbyAddDummy.addEventListener('click', triggerAddDummy);
+if (btnWaitingAddDummy) btnWaitingAddDummy.addEventListener('click', triggerAddDummy);
+
+if (btnLobbyStartGame) btnLobbyStartGame.addEventListener('click', triggerStartGame);
+if (btnWaitingStartGame) btnWaitingStartGame.addEventListener('click', triggerStartGame);
+
+if (btnWaitingLeaveRoom) btnWaitingLeaveRoom.addEventListener('click', () => leaveCurrentRoom());
+if (btnWaitingCopyCode) {
+  btnWaitingCopyCode.addEventListener('click', () => {
+    if (!activeRoomCode) return;
+    navigator.clipboard.writeText(activeRoomCode).then(() => {
+      showToast(`部屋コード #${activeRoomCode} をコピーしました！`);
+    });
+  });
+}
+if (btnWaitingVcToggle) {
+  btnWaitingVcToggle.addEventListener('click', () => {
+    setVcState(!voiceManager.isVcEnabled);
+  });
+}
+if (btnWaitingMicToggle) {
+  btnWaitingMicToggle.addEventListener('click', () => {
+    setMicState(!voiceManager.isMicMuted);
+  });
+}
+if (btnWaitingForceVc) {
+  btnWaitingForceVc.addEventListener('click', openForceVcModal);
+}
 
 // --- Role Announcement Phase (ユーザー要望: 最初は自分の役職が言い渡され、その後に試合スタート) ---
 function showRoleAnnouncement(roleId, room) {
   closeModal(onlinePlayModal);
-  if (topLeftChatContainer) topLeftChatContainer.style.display = 'block';
   const r = ALL_ROLES_MAP[roleId] || BASE_ROLES[1];
 
   revealRoleIcon.textContent = r.icon;
@@ -1292,11 +1488,17 @@ function showRoleAnnouncement(roleId, room) {
   openModal(roleAnnouncementModal);
   sound.playWolfHowl();
 
+  let autoConfirmTimer = setTimeout(() => {
+    if (roleAnnouncementModal.classList.contains('active')) {
+      btnConfirmMyRole.click();
+    }
+  }, 6000);
+
   btnConfirmMyRole.onclick = () => {
+    clearTimeout(autoConfirmTimer);
     sound.playSuccess();
     closeModal(roleAnnouncementModal);
-    gameView.style.display = 'flex';
-    if (topLeftChatContainer) topLeftChatContainer.style.display = 'block';
+    switchScreen('game');
     myRoleName.textContent = r.name;
     myRoleIcon.textContent = r.icon;
     myRoleDesc.textContent = r.desc;
@@ -1502,9 +1704,7 @@ if (btnHostNextPhase) {
 
 if (btnReturnToLobby) {
   btnReturnToLobby.addEventListener('click', () => {
-    gameView.style.display = 'none';
-    onlineHubView.style.display = 'block';
-    openModal(onlinePlayModal);
+    switchScreen('waiting');
   });
 }
 
@@ -1639,15 +1839,13 @@ btnFinishShop.addEventListener('click', () => closeModal(shopModal));
 // Online Play
 btnOnlinePlay.addEventListener('click', () => {
   if (activeRoomCode) {
-    onlineHubView.style.display = 'none';
-    onlineCreateRoomView.style.display = 'none';
-    onlineLobbyView.style.display = 'block';
+    switchScreen('waiting');
   } else {
     onlineHubView.style.display = 'block';
     onlineCreateRoomView.style.display = 'none';
-    onlineLobbyView.style.display = 'none';
+    onlineJoinRoomView.style.display = 'none';
+    openModal(onlinePlayModal);
   }
-  openModal(onlinePlayModal);
 });
 btnCloseOnlinePlay.addEventListener('click', () => {
   stopFirestoreRoomsListener();
@@ -1930,12 +2128,11 @@ async function joinDirectRoom(inputCode) {
       roomData
     });
 
-    // 3. ロビーへ即時画面遷移 (オンラインプレイモーダルを開いたまま待機ロビー表示)
+    // 3. ロビーへ即時画面遷移
     activeRoomCode = code;
     isHost = (roomData.hostId === localPlayerId);
     currentRoomData = roomData;
     enterLobbyView(code, roomData);
-    openModal(onlinePlayModal);
     sound.playSuccess();
     showToast(`🎉 部屋 #${code} に直接入室しました！`);
   } catch (err) {
@@ -2142,11 +2339,7 @@ async function leaveCurrentRoom(options = {}) {
   isHost = false;
   currentRoomData = null;
 
-  onlineLobbyView.style.display = 'none';
-  onlineHubView.style.display = 'block';
-  topLeftChatContainer.style.display = 'none';
-  gameView.style.display = 'none';
-  closeModal(onlinePlayModal);
+  switchScreen('main');
 
   // If user clicked browser back, clean up url hash without triggering another popstate
   if (window.location.hash.startsWith('#room=')) {
