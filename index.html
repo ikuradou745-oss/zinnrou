@@ -175,7 +175,7 @@
     }
 
     .nickname-chip .user-icon { color: var(--sky); font-size: 1rem; }
-    .nickname-chip .nick-text { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nickname-chip .nick-text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
 
     .btn-settings {
       display: flex;
@@ -1590,7 +1590,7 @@
       font-size: 0.8rem;
     }
     body.gui-mobile .nickname-chip .nick-text {
-      max-width: 65px;
+      max-width: 140px;
     }
     body.gui-mobile .btn-settings {
       padding: 5px 10px;
@@ -1736,7 +1736,7 @@
 
         <div class="nickname-chip" id="topNicknameChip" title="あなたのプロフィール（アイコン・ニックネーム）">
           <img id="topAvatarImg" class="chip-avatar-img" alt="アイコン" src="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><circle cx=%2220%22 cy=%2220%22 r=%2220%22 fill=%22%232563eb%22/><text x=%2220%22 y=%2226%22 font-size=%2218%22 text-anchor=%22middle%22 fill=%22white%22 font-weight=%22bold%22>人</text></svg>" />
-          <span class="nick-text" id="topNicknameText">ゲスト</span>
+          <span class="nick-text" id="topNicknameText">アイコン(ゲスト)</span>
         </div>
 
         <button class="btn-settings" id="btnOpenSettings" aria-label="設定">

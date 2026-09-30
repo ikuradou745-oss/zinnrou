@@ -28,6 +28,12 @@ localStorage.setItem('jinrou_player_id', localPlayerId);
 let localNickname = sessionStorage.getItem('jinrou_nickname') || localStorage.getItem('jinrou_nickname') || '';
 let localAvatarIcon = sessionStorage.getItem('jinrou_avatar_icon') || localStorage.getItem('jinrou_avatar_icon') || '';
 
+// Display format requirement: アイコン(名前)
+export function formatPlayerDisplayName(nickname) {
+  const name = (nickname || 'プレイヤー').trim();
+  return `アイコン(${name})`;
+}
+
 export function generateDefaultAvatar(name) {
   try {
     const canvas = document.createElement('canvas');
@@ -569,6 +575,7 @@ function initWebSocket() {
             code: activeRoomCode,
             playerId: localPlayerId,
             nickname: localNickname,
+            avatarIcon: localAvatarIcon || generateDefaultAvatar(localNickname),
             isVcOn: voiceManager.isVcEnabled
           }
         }));
@@ -675,7 +682,7 @@ function handleSocketMessage(msg) {
     }
     case 'CHAT_MESSAGE': {
       const isMe = payload.senderId === localPlayerId;
-      appendChatMessage(payload.senderName, payload.text, isMe ? 'me' : 'other', payload.id);
+      appendChatMessage(payload.senderName, payload.text, isMe ? 'me' : 'other', payload.id, payload.senderAvatar);
       if (!isMe) {
         sound.playBellSound ? sound.playBellSound() : sound.playClick();
       }
@@ -803,8 +810,25 @@ function validateNickname(name) {
 function applyNickname(nick) {
   localNickname = nick.trim();
   localStorage.setItem('jinrou_nickname', localNickname);
-  topNicknameText.textContent = localNickname;
+  sessionStorage.setItem('jinrou_nickname', localNickname);
+  if (topNicknameText) topNicknameText.textContent = formatPlayerDisplayName(localNickname);
+  if (settingsAvatarDisplayLabel) settingsAvatarDisplayLabel.textContent = formatPlayerDisplayName(localNickname);
+  if (!localAvatarIcon) {
+    localAvatarIcon = generateDefaultAvatar(localNickname);
+    localStorage.setItem('jinrou_avatar_icon', localAvatarIcon);
+  }
+  if (topAvatarImg) topAvatarImg.src = localAvatarIcon;
+  if (settingsAvatarPreview) settingsAvatarPreview.src = localAvatarIcon;
   scheduleProfileSync();
+
+  if (activeRoomCode) {
+    sendWs('UPDATE_PROFILE', {
+      playerId: localPlayerId,
+      nickname: localNickname,
+      avatarIcon: localAvatarIcon,
+      roomCode: activeRoomCode
+    });
+  }
 }
 
 function updateCoinsDisplay() {
@@ -827,7 +851,7 @@ function updateVcVolumeUI(vol) {
 
 function scheduleProfileSync() {
   if (!localPlayerId || !localNickname) return;
-  savePlayerProfile(localPlayerId, localNickname, vcVolume, userCoins, unlockedRoles);
+  savePlayerProfile(localPlayerId, localNickname, vcVolume, userCoins, unlockedRoles, localAvatarIcon);
 }
 
 // Cross-tab message listener for instant local multi-tab sync
@@ -838,7 +862,7 @@ if (roomBroadcastChannel) {
         const m = evt.data.chatMsg;
         if (!activeRoomCode || !evt.data.roomCode || activeRoomCode === evt.data.roomCode) {
           if (m.senderId !== localPlayerId) {
-            appendChatMessage(m.senderName, m.text, 'other', m.id);
+            appendChatMessage(m.senderName, m.text, 'other', m.id, m.senderAvatar);
             if (sound.playBellSound) sound.playBellSound(); else sound.playClick();
           }
         }
@@ -857,13 +881,15 @@ if (roomBroadcastChannel) {
 }
 
 // --- Multi-Surface Real-Time Chat ---
-function appendChatMessage(senderName, text, type = 'other', msgId = null) {
+function appendChatMessage(senderName, text, type = 'other', msgId = null, senderAvatar = '') {
   if (msgId && displayedChatMsgIds.has(msgId)) return;
   if (msgId) displayedChatMsgIds.add(msgId);
 
   const isMe = type === 'me';
   const isSys = type === 'system';
   const targetBoxes = [chatMessagesBox, waitingChatMessagesBox, gameChatMessagesBox];
+
+  const avatarSrc = senderAvatar || (isMe ? localAvatarIcon : '') || generateDefaultAvatar(senderName);
 
   targetBoxes.forEach((box) => {
     if (!box) return;
@@ -872,7 +898,15 @@ function appendChatMessage(senderName, text, type = 'other', msgId = null) {
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'chat-sender-name' + (isMe ? ' is-me' : isSys ? ' is-system' : '');
-    nameSpan.textContent = `${senderName}:`;
+    
+    if (isSys) {
+      nameSpan.textContent = `[システム]:`;
+    } else {
+      nameSpan.innerHTML = `
+        <img class="chat-avatar-img" src="${avatarSrc}" alt="" />
+        <span>${formatPlayerDisplayName(senderName)}:</span>
+      `;
+    }
 
     const textSpan = document.createElement('span');
     textSpan.className = 'chat-content-text';
@@ -904,10 +938,11 @@ function sendCurrentChat(explicitText = null) {
 
   const msgId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const myName = localNickname || '自分';
+  const myAvatar = localAvatarIcon || generateDefaultAvatar(myName);
   const cleanCode = (activeRoomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
 
   // 1. Instantly display on sender's screen across all active chat boxes!
-  appendChatMessage(myName, val, 'me', msgId);
+  appendChatMessage(myName, val, 'me', msgId, myAvatar);
   sound.playClick();
 
   // 2. BroadcastChannel for instant local peer tab sync
@@ -920,6 +955,7 @@ function sendCurrentChat(explicitText = null) {
           id: msgId,
           senderId: localPlayerId,
           senderName: myName,
+          senderAvatar: myAvatar,
           text: val,
           timestamp: Date.now()
         }
@@ -934,6 +970,7 @@ function sendCurrentChat(explicitText = null) {
       roomCode: cleanCode,
       senderId: localPlayerId,
       senderName: myName,
+      senderAvatar: myAvatar,
       text: val
     });
 
@@ -945,6 +982,7 @@ function sendCurrentChat(explicitText = null) {
         id: msgId,
         senderId: localPlayerId,
         senderName: myName,
+        senderAvatar: myAvatar,
         text: val
       })
     }).catch(() => {});
@@ -1264,13 +1302,15 @@ function updateLobbyUI(room) {
     lobbyPlayerRoster.innerHTML = '';
     players.forEach((p) => {
       const isMe = p.id === localPlayerId;
+      const avatarSrc = p.avatarIcon || (isMe ? localAvatarIcon : '') || generateDefaultAvatar(p.nickname);
       const row = document.createElement('div');
       row.className = 'lobby-player-item';
       row.id = `roster_${p.id}`;
       row.innerHTML = `
         <div class="lobby-player-info">
           <span class="speaking-indicator-ring ${p.isSpeaking ? 'speaking' : ''}"></span>
-          <span>👤 ${p.nickname}</span>
+          <img class="roster-avatar-img" src="${avatarSrc}" alt="icon" />
+          <span style="font-weight: 800; font-size: 0.95rem;">${formatPlayerDisplayName(p.nickname)}</span>
           ${p.isHost ? '<span style="font-size: 0.7rem; background: var(--crimson-light); color: var(--crimson); font-weight: 800; padding: 2px 6px; border-radius: 4px;">ホスト</span>' : ''}
           ${isMe ? '<span style="font-size: 0.7rem; color: var(--sky); font-weight: 800;">(あなた)</span>' : ''}
         </div>
@@ -1287,13 +1327,15 @@ function updateLobbyUI(room) {
     waitingPlayerRoster.innerHTML = '';
     players.forEach((p) => {
       const isMe = p.id === localPlayerId;
+      const avatarSrc = p.avatarIcon || (isMe ? localAvatarIcon : '') || generateDefaultAvatar(p.nickname);
       const row = document.createElement('div');
       row.className = 'lobby-player-item';
       row.id = `waiting_roster_${p.id}`;
       row.innerHTML = `
         <div class="lobby-player-info">
           <span class="speaking-indicator-ring ${p.isSpeaking ? 'speaking' : ''}"></span>
-          <span style="font-weight: 800; font-size: 0.95rem;">👤 ${p.nickname}</span>
+          <img class="roster-avatar-img" src="${avatarSrc}" alt="icon" />
+          <span style="font-weight: 800; font-size: 0.95rem;">${formatPlayerDisplayName(p.nickname)}</span>
           ${p.isHost ? '<span style="font-size: 0.72rem; background: var(--crimson-light); color: var(--crimson); font-weight: 900; padding: 2px 8px; border-radius: 9999px;">👑 ホスト</span>' : ''}
           ${isMe ? '<span style="font-size: 0.72rem; background: var(--sky-light); color: var(--sky); font-weight: 900; padding: 2px 8px; border-radius: 9999px;">(あなた)</span>' : ''}
         </div>
@@ -1676,6 +1718,7 @@ function updateGamePhaseUI(room) {
 
   players.forEach((p) => {
     const isMe = p.id === localPlayerId;
+    const avatarSrc = p.avatarIcon || (isMe ? localAvatarIcon : '') || generateDefaultAvatar(p.nickname);
     const card = document.createElement('div');
     card.className = 'game-player-card' + (!p.isAlive ? ' is-dead' : '') + (p.isSpeaking ? ' speaking' : '');
     card.id = `game_player_${p.id}`;
@@ -1718,8 +1761,8 @@ function updateGamePhaseUI(room) {
     }
 
     card.innerHTML = `
-      <div style="font-size: 1.8rem; margin-bottom: 2px;">👤</div>
-      <div style="font-weight: 800; font-size: 0.88rem; color: var(--text-main);">${p.nickname}</div>
+      <img class="game-player-avatar-img" src="${avatarSrc}" alt="${p.nickname}" />
+      <div style="font-weight: 800; font-size: 0.88rem; color: var(--text-main);">${formatPlayerDisplayName(p.nickname)}</div>
       <div style="font-size: 0.72rem; color: ${p.isAlive ? 'var(--emerald)' : 'var(--crimson)'}; font-weight: 800;">
         ${p.isAlive ? '生存' : '追放/死亡'}
       </div>
@@ -1732,7 +1775,7 @@ function updateGamePhaseUI(room) {
       btn.addEventListener('click', () => {
         sound.playClick();
         sendWs('GAME_ACTION', { action: actionType, targetId: p.id });
-        showToast(`「${p.nickname}」を選択しました`);
+        showToast(`「${formatPlayerDisplayName(p.nickname)}」を選択しました`);
       });
     }
 
@@ -1836,6 +1879,471 @@ function renderShop() {
 }
 
 // --- Event Listeners ---
+// Profile Avatar Canvas Drawing Engine
+let canvasCtx = null;
+let currentTool = 'pencil'; // 'pencil' | 'line' | 'circle' | 'fill' | 'eraser'
+let currentColor = '#0f172a';
+let currentSize = 5;
+let isDrawing = false;
+let startX = 0;
+let startY = 0;
+let snapshotData = null;
+const undoStack = [];
+const MAX_UNDO = 25;
+
+function getCanvasCoords(e) {
+  if (!avatarCanvas) return { x: 0, y: 0 };
+  const rect = avatarCanvas.getBoundingClientRect();
+  const scaleX = avatarCanvas.width / (rect.width || 170);
+  const scaleY = avatarCanvas.height / (rect.height || 170);
+  const clientX = e.clientX ?? (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+  const clientY = e.clientY ?? (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+  return {
+    x: Math.max(0, Math.min(avatarCanvas.width, (clientX - rect.left) * scaleX)),
+    y: Math.max(0, Math.min(avatarCanvas.height, (clientY - rect.top) * scaleY))
+  };
+}
+
+function saveUndoState() {
+  if (!canvasCtx || !avatarCanvas) return;
+  try {
+    if (undoStack.length >= MAX_UNDO) undoStack.shift();
+    undoStack.push(canvasCtx.getImageData(0, 0, avatarCanvas.width, avatarCanvas.height));
+  } catch (e) {}
+}
+
+function updateAvatarLivePreview() {
+  if (!avatarCanvas) return;
+  try {
+    const dataUrl = avatarCanvas.toDataURL('image/png');
+    if (settingsAvatarPreview) settingsAvatarPreview.src = dataUrl;
+    if (settingsAvatarDisplayLabel) {
+      settingsAvatarDisplayLabel.textContent = formatPlayerDisplayName(localNickname || '自分');
+    }
+  } catch (e) {}
+}
+
+function floodFill(sX, sY, fillHex) {
+  if (!canvasCtx || !avatarCanvas) return;
+  const w = avatarCanvas.width;
+  const h = avatarCanvas.height;
+  if (sX < 0 || sX >= w || sY < 0 || sY >= h) return;
+
+  const imgData = canvasCtx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+
+  // Convert hex color to RGBA
+  let hex = fillHex.replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  const targetR = parseInt(hex.slice(0, 2), 16) || 0;
+  const targetG = parseInt(hex.slice(2, 4), 16) || 0;
+  const targetB = parseInt(hex.slice(4, 6), 16) || 0;
+  const targetA = 255;
+
+  const startIdx = (sY * w + sX) * 4;
+  const startR = data[startIdx];
+  const startG = data[startIdx + 1];
+  const startB = data[startIdx + 2];
+  const startA = data[startIdx + 3];
+
+  if (Math.abs(startR - targetR) < 6 &&
+      Math.abs(startG - targetG) < 6 &&
+      Math.abs(startB - targetB) < 6 &&
+      Math.abs(startA - targetA) < 6) {
+    return;
+  }
+
+  function matches(idx) {
+    return Math.abs(data[idx] - startR) <= 12 &&
+           Math.abs(data[idx + 1] - startG) <= 12 &&
+           Math.abs(data[idx + 2] - startB) <= 12 &&
+           Math.abs(data[idx + 3] - startA) <= 12;
+  }
+
+  const queue = [[sX, sY]];
+  const visited = new Uint8Array(w * h);
+  visited[sY * w + sX] = 1;
+
+  while (queue.length > 0) {
+    const [cx, cy] = queue.pop();
+    const idx = (cy * w + cx) * 4;
+    data[idx] = targetR;
+    data[idx + 1] = targetG;
+    data[idx + 2] = targetB;
+    data[idx + 3] = targetA;
+
+    const neighbors = [
+      [cx + 1, cy],
+      [cx - 1, cy],
+      [cx, cy + 1],
+      [cx, cy - 1]
+    ];
+    for (let i = 0; i < 4; i++) {
+      const nx = neighbors[i][0];
+      const ny = neighbors[i][1];
+      if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+        const nPos = ny * w + nx;
+        if (!visited[nPos]) {
+          visited[nPos] = 1;
+          const nIdx = nPos * 4;
+          if (matches(nIdx)) {
+            queue.push([nx, ny]);
+          }
+        }
+      }
+    }
+  }
+
+  canvasCtx.putImageData(imgData, 0, 0);
+}
+
+function drawWolfSampleAvatar() {
+  if (!canvasCtx || !avatarCanvas) return;
+  const w = avatarCanvas.width;
+  const h = avatarCanvas.height;
+
+  // Background - Dark Night
+  canvasCtx.fillStyle = '#0f172a';
+  canvasCtx.fillRect(0, 0, w, h);
+
+  // Glowing Full Moon
+  canvasCtx.fillStyle = '#fef08a';
+  canvasCtx.beginPath();
+  canvasCtx.arc(w / 2, h / 2 - 10, 56, 0, Math.PI * 2);
+  canvasCtx.fill();
+
+  canvasCtx.fillStyle = '#fde047';
+  canvasCtx.beginPath();
+  canvasCtx.arc(w / 2 - 20, h / 2 - 25, 12, 0, Math.PI * 2);
+  canvasCtx.fill();
+  canvasCtx.beginPath();
+  canvasCtx.arc(w / 2 + 22, h / 2 - 5, 9, 0, Math.PI * 2);
+  canvasCtx.fill();
+
+  // Wolf Head Silhouette
+  canvasCtx.fillStyle = '#1e293b';
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(w / 2 - 40, h / 2 + 25);
+  canvasCtx.lineTo(w / 2 - 52, h / 2 - 45); // Left ear tip
+  canvasCtx.lineTo(w / 2 - 20, h / 2 - 15);
+  canvasCtx.lineTo(w / 2 + 20, h / 2 - 15);
+  canvasCtx.lineTo(w / 2 + 52, h / 2 - 45); // Right ear tip
+  canvasCtx.lineTo(w / 2 + 40, h / 2 + 25);
+  canvasCtx.lineTo(w / 2 + 24, h / 2 + 65); // Muzzle right
+  canvasCtx.lineTo(w / 2, h / 2 + 76);      // Chin tip
+  canvasCtx.lineTo(w / 2 - 24, h / 2 + 65); // Muzzle left
+  canvasCtx.closePath();
+  canvasCtx.fill();
+
+  // Wolf Inner Ears
+  canvasCtx.fillStyle = '#e11d48';
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(w / 2 - 35, h / 2 + 5);
+  canvasCtx.lineTo(w / 2 - 45, h / 2 - 35);
+  canvasCtx.lineTo(w / 2 - 25, h / 2 - 10);
+  canvasCtx.closePath();
+  canvasCtx.fill();
+
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(w / 2 + 35, h / 2 + 5);
+  canvasCtx.lineTo(w / 2 + 45, h / 2 - 35);
+  canvasCtx.lineTo(w / 2 + 25, h / 2 - 10);
+  canvasCtx.closePath();
+  canvasCtx.fill();
+
+  // Crimson Eyes
+  canvasCtx.fillStyle = '#e11d48';
+  canvasCtx.beginPath();
+  canvasCtx.ellipse(w / 2 - 17, h / 2 + 15, 6, 4, -0.2, 0, Math.PI * 2);
+  canvasCtx.fill();
+  canvasCtx.beginPath();
+  canvasCtx.ellipse(w / 2 + 17, h / 2 + 15, 6, 4, 0.2, 0, Math.PI * 2);
+  canvasCtx.fill();
+
+  // Golden pupils
+  canvasCtx.fillStyle = '#fbbf24';
+  canvasCtx.beginPath();
+  canvasCtx.arc(w / 2 - 16, h / 2 + 15, 2.5, 0, Math.PI * 2);
+  canvasCtx.fill();
+  canvasCtx.beginPath();
+  canvasCtx.arc(w / 2 + 16, h / 2 + 15, 2.5, 0, Math.PI * 2);
+  canvasCtx.fill();
+
+  // Snout / Nose
+  canvasCtx.fillStyle = '#020617';
+  canvasCtx.beginPath();
+  canvasCtx.ellipse(w / 2, h / 2 + 45, 7, 5, 0, 0, Math.PI * 2);
+  canvasCtx.fill();
+
+  // Sharp fangs
+  canvasCtx.fillStyle = '#ffffff';
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(w / 2 - 12, h / 2 + 53);
+  canvasCtx.lineTo(w / 2 - 7, h / 2 + 63);
+  canvasCtx.lineTo(w / 2 - 3, h / 2 + 53);
+  canvasCtx.fill();
+
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(w / 2 + 3, h / 2 + 53);
+  canvasCtx.lineTo(w / 2 + 7, h / 2 + 63);
+  canvasCtx.lineTo(w / 2 + 12, h / 2 + 53);
+  canvasCtx.fill();
+}
+
+function loadCurrentAvatarIntoCanvas() {
+  if (!avatarCanvas) return;
+  if (!canvasCtx) {
+    canvasCtx = avatarCanvas.getContext('2d', { willReadFrequently: true });
+    avatarCanvas.width = 170;
+    avatarCanvas.height = 170;
+  }
+  if (!canvasCtx) return;
+
+  const w = avatarCanvas.width;
+  const h = avatarCanvas.height;
+
+  canvasCtx.fillStyle = '#ffffff';
+  canvasCtx.fillRect(0, 0, w, h);
+
+  const iconToLoad = localAvatarIcon || (localNickname ? generateDefaultAvatar(localNickname) : '');
+  if (iconToLoad) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      canvasCtx.drawImage(img, 0, 0, w, h);
+      undoStack.length = 0;
+      saveUndoState();
+      updateAvatarLivePreview();
+    };
+    img.onerror = () => {
+      undoStack.length = 0;
+      saveUndoState();
+      updateAvatarLivePreview();
+    };
+    img.src = iconToLoad;
+  } else {
+    undoStack.length = 0;
+    saveUndoState();
+    updateAvatarLivePreview();
+  }
+}
+
+function initAvatarCanvas() {
+  if (!avatarCanvas) return;
+  canvasCtx = avatarCanvas.getContext('2d', { willReadFrequently: true });
+  if (!canvasCtx) return;
+
+  avatarCanvas.width = 170;
+  avatarCanvas.height = 170;
+  canvasCtx.lineCap = 'round';
+  canvasCtx.lineJoin = 'round';
+
+  // Pointer Events (Mouse, Touch, Pen support)
+  avatarCanvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (!canvasCtx) return;
+    const { x, y } = getCanvasCoords(e);
+
+    if (currentTool === 'fill') {
+      floodFill(Math.round(x), Math.round(y), currentColor);
+      saveUndoState();
+      updateAvatarLivePreview();
+      return;
+    }
+
+    isDrawing = true;
+    startX = x;
+    startY = y;
+    snapshotData = canvasCtx.getImageData(0, 0, avatarCanvas.width, avatarCanvas.height);
+
+    canvasCtx.lineWidth = currentSize;
+    canvasCtx.strokeStyle = (currentTool === 'eraser') ? '#ffffff' : currentColor;
+    canvasCtx.fillStyle = (currentTool === 'eraser') ? '#ffffff' : currentColor;
+
+    if (currentTool === 'pencil' || currentTool === 'eraser') {
+      canvasCtx.beginPath();
+      canvasCtx.arc(x, y, currentSize / 2, 0, Math.PI * 2);
+      canvasCtx.fill();
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(x, y);
+    }
+  });
+
+  avatarCanvas.addEventListener('pointermove', (e) => {
+    if (!isDrawing || !canvasCtx) return;
+    e.preventDefault();
+    const { x, y } = getCanvasCoords(e);
+
+    canvasCtx.lineWidth = currentSize;
+    canvasCtx.strokeStyle = (currentTool === 'eraser') ? '#ffffff' : currentColor;
+    canvasCtx.fillStyle = (currentTool === 'eraser') ? '#ffffff' : currentColor;
+
+    if (currentTool === 'pencil' || currentTool === 'eraser') {
+      canvasCtx.lineTo(x, y);
+      canvasCtx.stroke();
+    } else if (currentTool === 'line') {
+      canvasCtx.putImageData(snapshotData, 0, 0);
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(startX, startY);
+      canvasCtx.lineTo(x, y);
+      canvasCtx.stroke();
+    } else if (currentTool === 'circle') {
+      canvasCtx.putImageData(snapshotData, 0, 0);
+      const rx = Math.abs(x - startX) / 2;
+      const ry = Math.abs(y - startY) / 2;
+      const cx = Math.min(startX, x) + rx;
+      const cy = Math.min(startY, y) + ry;
+      canvasCtx.beginPath();
+      canvasCtx.ellipse(cx, cy, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2);
+      canvasCtx.stroke();
+    }
+  });
+
+  const finishDrawing = () => {
+    if (!isDrawing) return;
+    isDrawing = false;
+    if (canvasCtx) canvasCtx.closePath();
+    saveUndoState();
+    updateAvatarLivePreview();
+  };
+
+  avatarCanvas.addEventListener('pointerup', finishDrawing);
+  avatarCanvas.addEventListener('pointercancel', finishDrawing);
+  avatarCanvas.addEventListener('pointerleave', finishDrawing);
+
+  // Tool buttons (Pencil, Line, Circle, Fill, Eraser)
+  const toolButtons = [
+    { btn: btnToolPencil, tool: 'pencil' },
+    { btn: btnToolLine, tool: 'line' },
+    { btn: btnToolCircle, tool: 'circle' },
+    { btn: btnToolFill, tool: 'fill' },
+    { btn: btnToolEraser, tool: 'eraser' }
+  ];
+
+  toolButtons.forEach(({ btn, tool }) => {
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      currentTool = tool;
+      toolButtons.forEach(t => t.btn && t.btn.classList.toggle('active', t.tool === tool));
+    });
+  });
+
+  // Size buttons
+  if (canvasSizeGroup) {
+    const sizeButtons = canvasSizeGroup.querySelectorAll('.btn-size-dot');
+    sizeButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentSize = parseInt(btn.getAttribute('data-size'), 10) || 5;
+        sizeButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+  }
+
+  // Palette color swatches
+  if (canvasColorPalette) {
+    const swatches = canvasColorPalette.querySelectorAll('.color-swatch');
+    swatches.forEach((sw) => {
+      sw.addEventListener('click', () => {
+        currentColor = sw.getAttribute('data-color') || '#0f172a';
+        if (avatarColorPicker) avatarColorPicker.value = currentColor;
+        swatches.forEach(s => s.classList.remove('active'));
+        sw.classList.add('active');
+        if (currentTool === 'eraser') {
+          currentTool = 'pencil';
+          toolButtons.forEach(t => t.btn && t.btn.classList.toggle('active', t.tool === 'pencil'));
+        }
+      });
+    });
+  }
+
+  // Free Color Picker (16.7M colors)
+  if (avatarColorPicker) {
+    avatarColorPicker.addEventListener('input', (e) => {
+      currentColor = e.target.value;
+      if (canvasColorPalette) {
+        canvasColorPalette.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+      }
+      if (currentTool === 'eraser') {
+        currentTool = 'pencil';
+        toolButtons.forEach(t => t.btn && t.btn.classList.toggle('active', t.tool === 'pencil'));
+      }
+    });
+  }
+
+  // Undo button
+  if (btnAvatarUndo) {
+    btnAvatarUndo.addEventListener('click', () => {
+      if (undoStack.length > 1) {
+        undoStack.pop();
+        const prev = undoStack[undoStack.length - 1];
+        if (canvasCtx && prev) {
+          canvasCtx.putImageData(prev, 0, 0);
+          updateAvatarLivePreview();
+        }
+      } else {
+        showToast('これ以上戻せません');
+      }
+    });
+  }
+
+  // Clear button
+  if (btnAvatarClear) {
+    btnAvatarClear.addEventListener('click', () => {
+      if (!canvasCtx || !avatarCanvas) return;
+      canvasCtx.fillStyle = '#ffffff';
+      canvasCtx.fillRect(0, 0, avatarCanvas.width, avatarCanvas.height);
+      saveUndoState();
+      updateAvatarLivePreview();
+      showToast('キャンバスを全消去しました');
+    });
+  }
+
+  // Wolf Sample button
+  if (btnAvatarSampleWolf) {
+    btnAvatarSampleWolf.addEventListener('click', () => {
+      drawWolfSampleAvatar();
+      saveUndoState();
+      updateAvatarLivePreview();
+      sound.playClick();
+      showToast('🐺 人狼サンプルを描画しました！');
+    });
+  }
+
+  // Save Avatar button
+  if (btnSaveAvatar) {
+    btnSaveAvatar.addEventListener('click', () => {
+      if (!avatarCanvas) return;
+      const newAvatar = avatarCanvas.toDataURL('image/png');
+      localAvatarIcon = newAvatar;
+      localStorage.setItem('jinrou_avatar_icon', localAvatarIcon);
+      sessionStorage.setItem('jinrou_avatar_icon', localAvatarIcon);
+
+      if (topAvatarImg) topAvatarImg.src = localAvatarIcon;
+      if (settingsAvatarPreview) settingsAvatarPreview.src = localAvatarIcon;
+      if (settingsAvatarDisplayLabel) {
+        settingsAvatarDisplayLabel.textContent = formatPlayerDisplayName(localNickname || '自分');
+      }
+
+      scheduleProfileSync();
+
+      if (activeRoomCode) {
+        sendWs('UPDATE_PROFILE', {
+          playerId: localPlayerId,
+          nickname: localNickname,
+          avatarIcon: localAvatarIcon,
+          roomCode: activeRoomCode
+        });
+      }
+
+      sound.playSuccess();
+      showToast('🖼️ プロフィールアイコンを保存しました！');
+    });
+  }
+
+  loadCurrentAvatarIntoCanvas();
+}
+
 btnOpenSettings.addEventListener('click', () => {
   settingsNicknameInput.value = localNickname;
   settingsCharCounter.textContent = `${localNickname.length}/8`;
@@ -1843,6 +2351,10 @@ btnOpenSettings.addEventListener('click', () => {
   updateVcVolumeUI(vcVolume);
   setVcState(voiceManager.isVcEnabled);
   setMicState(voiceManager.isMicMuted);
+  if (settingsAvatarDisplayLabel) {
+    settingsAvatarDisplayLabel.textContent = formatPlayerDisplayName(localNickname || '自分');
+  }
+  loadCurrentAvatarIntoCanvas();
   openModal(settingsModal);
 });
 topNicknameChip.addEventListener('click', () => btnOpenSettings.click());
@@ -1852,6 +2364,9 @@ btnFinishSettings.addEventListener('click', () => closeModal(settingsModal));
 settingsNicknameInput.addEventListener('input', (e) => {
   settingsCharCounter.textContent = `${e.target.value.length}/8`;
   settingsErrorMsg.classList.remove('visible');
+  if (settingsAvatarDisplayLabel) {
+    settingsAvatarDisplayLabel.textContent = formatPlayerDisplayName(e.target.value || '自分');
+  }
 });
 
 btnSaveNickname.addEventListener('click', () => {
@@ -2169,13 +2684,15 @@ async function joinDirectRoom(inputCode) {
 
   try {
     // 1. Firebase Firestore & Server に直接参加（ホスト申請不要・即入室）
-    const roomData = await joinFirestoreRoom(code, localPlayerId, localNickname, voiceManager.isVcEnabled);
+    const myAvatar = localAvatarIcon || generateDefaultAvatar(localNickname);
+    const roomData = await joinFirestoreRoom(code, localPlayerId, localNickname, voiceManager.isVcEnabled, myAvatar);
 
     // 2. WebSocket サーバへ JOIN_ROOM 通知
     sendWs('JOIN_ROOM', {
       code,
       playerId: localPlayerId,
       nickname: localNickname,
+      avatarIcon: myAvatar,
       isVcOn: voiceManager.isVcEnabled,
       roomData
     });
@@ -2292,13 +2809,15 @@ btnConfirmCreateRoom.addEventListener('click', async () => {
     }
     const finalRolesList = expandRolesList(finalConfig);
 
+    const myAvatar = localAvatarIcon || generateDefaultAvatar(localNickname);
     const roomData = await createFirestoreRoom(code, localPlayerId, localNickname, {
       name: roomName,
       maxPlayers: createRoomPlayerCount,
       discussionTime: createRoomDiscussionTime,
       roleMode: createRoomMode,
       rolesConfig: finalConfig,
-      rolesList: finalRolesList
+      rolesList: finalRolesList,
+      avatarIcon: myAvatar
     });
 
     activeRoomCode = code;
@@ -2310,6 +2829,7 @@ btnConfirmCreateRoom.addEventListener('click', async () => {
       name: roomName,
       playerId: localPlayerId,
       nickname: localNickname,
+      avatarIcon: myAvatar,
       maxPlayers: createRoomPlayerCount,
       discussionTime: createRoomDiscussionTime,
       roleMode: createRoomMode,
@@ -2565,10 +3085,20 @@ function initApp() {
   setVcState(true); // VC ON by default
   loadActiveRooms();
 
+  // Initialize Profile Avatar Canvas
+  initAvatarCanvas();
+
+  const currentDisplayAvatar = localAvatarIcon || generateDefaultAvatar(localNickname || 'ゲスト');
+  if (topAvatarImg) topAvatarImg.src = currentDisplayAvatar;
+  if (settingsAvatarPreview) settingsAvatarPreview.src = currentDisplayAvatar;
+  if (settingsAvatarDisplayLabel) {
+    settingsAvatarDisplayLabel.textContent = formatPlayerDisplayName(localNickname || '自分');
+  }
+
   if (!localNickname || !validateNickname(localNickname)) {
     openModal(initialNicknameModal);
   } else {
-    topNicknameText.textContent = localNickname;
+    topNicknameText.textContent = formatPlayerDisplayName(localNickname);
     scheduleProfileSync();
   }
 
