@@ -1511,6 +1511,29 @@ function enterLobbyView(roomCode, roomData) {
     if (updatedRoom && activeRoomCode === roomCode) {
       currentRoomData = updatedRoom;
       updateLobbyUI(updatedRoom);
+
+      // 1. チャット同期 (Firestore冗長化: 相手の送信メッセージも漏れなく受信)
+      if (Array.isArray(updatedRoom.chatHistory)) {
+        updatedRoom.chatHistory.forEach((m) => {
+          if (m && m.id && !displayedChatMsgIds.has(m.id)) {
+            const isMe = m.senderId === localPlayerId;
+            appendChatMessage(m.senderName, m.text, isMe ? 'me' : 'other', m.id, m.senderAvatar);
+          }
+        });
+      }
+
+      // 2. ゲーム開始同期 (Firestore冗長化: 部屋にいる全員が確実にゲーム画面へ遷移！)
+      if (updatedRoom.status === 'in_game' && updatedRoom.game) {
+        if (!gameView || gameView.style.display !== 'flex') {
+          const myRole = (updatedRoom.roles && updatedRoom.roles[localPlayerId]) ||
+                         (updatedRoom.players && updatedRoom.players[localPlayerId]?.role) ||
+                         mySecretRole || 'villager';
+          mySecretRole = myRole;
+          showRoleAnnouncement(myRole, updatedRoom);
+        } else {
+          updateGamePhaseUI(updatedRoom);
+        }
+      }
     }
   });
 }
@@ -1524,7 +1547,21 @@ function triggerStartGame() {
   }
   sound.playWolfHowl();
   showToast('🐺 役職を配り、ゲームを開始します...');
+
+  // 1. WebSocketでSTART_GAME送信
   sendWs('START_GAME', { roomCode: activeRoomCode, playerId: localPlayerId });
+
+  // 2. REST APIフォールバック（二重経路で確実にゲーム開始を保障）
+  fetch(`/api/jinrou/rooms/${encodeURIComponent(activeRoomCode)}/start-game`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playerId: localPlayerId })
+  }).then(async (res) => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      if (err.error) showToast(err.error);
+    }
+  }).catch(() => {});
 }
 
 // Dummy Bot addition for instant testing (一人でも即テストプレイ可能)

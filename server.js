@@ -26,7 +26,7 @@ if (fs.existsSync(firebaseConfigFile)) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 const HOST = '0.0.0.0';
 
 function ensureGameBundle() {
@@ -335,6 +335,132 @@ function assignRoles(playerIds, configuredRolesList) {
   return assignments;
 }
 
+// Unified Authoritative Game Starter (callable via WebSocket or REST)
+async function executeStartGame(room, requesterId = null) {
+  if (!room) return { error: '部屋が見つかりません' };
+  if (room.status !== 'waiting') return { error: '既にゲームが開始されています' };
+
+  // 最新のFirestoreからプレイヤーをマージ
+  if (firestoreDb) {
+    try {
+      const snap = await getDoc(doc(firestoreDb, 'jinrou_rooms', room.code));
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        if (data && data.players) {
+          for (const [pId, p] of Object.entries(data.players)) {
+            if (!room.players.has(pId)) {
+              room.players.set(pId, {
+                id: pId,
+                nickname: p.nickname || 'プレイヤー',
+                avatarIcon: p.avatarIcon || '',
+                isHost: p.isHost ?? (pId === room.hostId),
+                isAlive: true,
+                isVcOn: true,
+                isMuted: false,
+                isSpeaking: false,
+                joinedAt: Date.now()
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Minimum 2 players required to start (3+ recommended)
+  const currentCount = room.players.size;
+  if (currentCount < 2) {
+    return {
+      error: `ゲームを開始するには最低2人のプレイヤーが必要です（現在: ${currentCount}人）。`
+    };
+  }
+
+  // Assign secret roles
+  const playerIds = Array.from(room.players.keys());
+  const roleAssignments = assignRoles(playerIds, room.rolesList);
+
+  for (const [pid, p] of room.players.entries()) {
+    p.role = roleAssignments[pid] || 'villager';
+    p.isAlive = true;
+    p.usedArcher = false;
+    p.usedMedic = false;
+  }
+
+  room.status = 'in_game';
+  broadcastActiveRoomsList();
+  room.game = {
+    phase: 'role_reveal', // 1. Secret role announcement first
+    phaseTitle: '📜 役職告知・確認',
+    dayCount: 1,
+    timerSec: 10, // 10 seconds for initial role reveal
+    votes: {}, // voterId -> targetId
+    nightActions: {}, // role -> targetId
+    lastExiled: null,
+    lastVictim: null,
+    revealedTraitor: null,
+    hunterRevengeTarget: null,
+    winner: null,
+    winnerTitle: null
+  };
+
+  // Start server authoritative phase timer
+  startRoomTimer(room);
+
+  const snap = getRoomSnapshot(room);
+
+  // 1. 各ソケットへ役職付きGAME_STARTEDを送信
+  for (const [pid, client] of room.sockets.entries()) {
+    if (client && client.readyState === WebSocket.OPEN) {
+      const myRole = roleAssignments[pid] || 'villager';
+      try {
+        client.send(JSON.stringify({
+          type: 'GAME_STARTED',
+          payload: {
+            ...snap,
+            myRole
+          }
+        }));
+      } catch (e) {}
+    }
+  }
+
+  // 2. ブロードキャストでも全クライアント（再接続ソケット含む）にPHASE_CHANGED配信
+  broadcastToRoom(room.code, {
+    type: 'PHASE_CHANGED',
+    payload: snap
+  });
+
+  // 3. Firestoreにもstatus: in_game, game, roles, players を同期保存！
+  if (firestoreDb) {
+    const playersObj = {};
+    for (const [pid, p] of room.players.entries()) {
+      playersObj[pid] = {
+        id: p.id,
+        nickname: p.nickname,
+        avatarIcon: p.avatarIcon || '',
+        role: p.role,
+        isHost: p.isHost,
+        isAlive: p.isAlive
+      };
+    }
+    for (const col of ['jinrou_rooms', 'rooms']) {
+      try {
+        const roomRef = doc(firestoreDb, col, room.code);
+        await updateDoc(roomRef, {
+          status: 'in_game',
+          game: room.game,
+          players: playersObj,
+          roles: roleAssignments,
+          updatedAt: Date.now()
+        });
+      } catch (e) {}
+    }
+  }
+
+  console.log(`[jinrou-online] Game started successfully in Room #${room.code} with ${currentCount} players!`);
+  return { success: true, snap };
+}
+
 // REST Endpoints
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', app: 'jinrou-online', activeRooms: rooms.size });
@@ -609,7 +735,31 @@ app.post('/api/jinrou/rooms/:code/chat', async (req, res) => {
     payload: chatMsg
   });
 
+  if (firestoreDb) {
+    for (const col of ['jinrou_rooms', 'rooms']) {
+      try {
+        const roomRef = doc(firestoreDb, col, cleanCode);
+        await updateDoc(roomRef, {
+          lastChatMsg: chatMsg,
+          chatHistory: room.chatHistory.slice(-20),
+          updatedAt: Date.now()
+        });
+      } catch (e) {}
+    }
+  }
+
   res.json({ success: true, chatMsg });
+});
+
+// REST Fallback for Starting Game (Dual-path start guarantee)
+app.post('/api/jinrou/rooms/:code/start-game', async (req, res) => {
+  const cleanCode = (req.params.code || '').toString().replace(/^[#＃\s]/g, '').trim();
+  const room = await ensureRoomInMemory(cleanCode);
+  if (!room) return res.status(404).json({ error: '部屋が見つかりません' });
+  const { playerId } = req.body || {};
+  const result = await executeStartGame(room, playerId);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
 });
 
 app.post('/api/jinrou/rooms/:code/add-dummy', async (req, res) => {
@@ -969,71 +1119,34 @@ wss.on('connection', (ws) => {
 
         // --- Start Game (Requires at least 3 players) ---
         case 'START_GAME': {
-          if (!clientRoomCode) return;
-          const room = rooms.get(clientRoomCode);
+          const code = (payload.roomCode || payload.code || clientRoomCode || ws._roomCode || '').toString().replace(/^[#＃\s]/g, '').trim();
+          if (!code) return;
+          const room = rooms.get(code) || await ensureRoomInMemory(code);
           if (!room) return;
 
-          if (room.hostId !== clientPlayerId) {
+          const pId = payload.playerId || clientPlayerId || ws._playerId;
+          if (pId) {
+            clientPlayerId = pId;
+            ws._playerId = pId;
+            room.sockets.set(pId, ws);
+          }
+          clientRoomCode = code;
+          ws._roomCode = code;
+
+          // ホストチェック（hostIdが記録されている場合）
+          if (room.hostId && pId && room.hostId !== pId) {
             return ws.send(JSON.stringify({
               type: 'ERROR',
               payload: { message: 'ゲームを開始できるのはホストのみです。' }
             }));
           }
 
-          // Minimum 2 players required to start (3+ players recommended)
-          const currentCount = room.players.size;
-          if (currentCount < 2) {
+          const result = await executeStartGame(room, pId);
+          if (result.error) {
             return ws.send(JSON.stringify({
               type: 'ERROR',
-              payload: {
-                message: `ゲームを開始するには最低2人のプレイヤーが必要です（現在: ${currentCount}人）。「Bot追加」ボタンで練習用プレイヤーを追加できます。`
-              }
+              payload: { message: result.error }
             }));
-          }
-
-          // Assign secret roles
-          const playerIds = Array.from(room.players.keys());
-          const roleAssignments = assignRoles(playerIds, room.rolesList);
-
-          for (const [pid, p] of room.players.entries()) {
-            p.role = roleAssignments[pid] || 'villager';
-            p.isAlive = true;
-            p.usedArcher = false;
-            p.usedMedic = false;
-          }
-
-          room.status = 'in_game';
-          broadcastActiveRoomsList();
-          room.game = {
-            phase: 'role_reveal', // 1. Secret role announcement first
-            phaseTitle: '📜 役職告知・確認',
-            dayCount: 1,
-            timerSec: 10, // 10 seconds for initial role reveal
-            votes: {}, // voterId -> targetId
-            nightActions: {}, // role -> targetId
-            lastExiled: null,
-            lastVictim: null,
-            revealedTraitor: null,
-            hunterRevengeTarget: null,
-            winner: null,
-            winnerTitle: null
-          };
-
-          // Start server authoritative phase timer
-          startRoomTimer(room);
-
-          // Broadcast game started with secret personal role
-          for (const [pid, client] of room.sockets.entries()) {
-            if (client && client.readyState === WebSocket.OPEN) {
-              const myRole = roleAssignments[pid] || 'villager';
-              client.send(JSON.stringify({
-                type: 'GAME_STARTED',
-                payload: {
-                  ...getRoomSnapshot(room),
-                  myRole
-                }
-              }));
-            }
           }
           break;
         }
@@ -1111,6 +1224,19 @@ wss.on('connection', (ws) => {
             type: 'CHAT_MESSAGE',
             payload: chatMsg
           });
+
+          if (firestoreDb) {
+            for (const col of ['jinrou_rooms', 'rooms']) {
+              try {
+                const roomRef = doc(firestoreDb, col, code);
+                await updateDoc(roomRef, {
+                  lastChatMsg: chatMsg,
+                  chatHistory: room.chatHistory.slice(-20),
+                  updatedAt: Date.now()
+                });
+              } catch (e) {}
+            }
+          }
           break;
         }
 
